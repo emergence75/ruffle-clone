@@ -19,6 +19,7 @@ use crate::drawing::Drawing;
 use crate::events::{ButtonKeyCode, ClipEvent, ClipEventResult, KeyCode};
 use crate::font::{round_down_to_pixel, Glyph, TextRenderSettings};
 use crate::html::{BoxBounds, FormatSpans, LayoutBox, LayoutContent, TextFormat};
+use crate::library::Library;
 use crate::prelude::*;
 use crate::string::{utils as string_utils, AvmString, WStr, WString};
 use crate::tag_utils::SwfMovie;
@@ -154,6 +155,9 @@ pub struct EditTextData<'gc> {
 
     /// How many lines down the text is offset by. 1-based index.
     scroll: usize,
+
+    /// Whether the text layout needs to be recalculated.
+    is_layout_dirty: bool,
 }
 
 // TODO: would be nicer to compute (and return) this during layout, instead of afterwards
@@ -240,16 +244,6 @@ impl<'gc> EditText<'gc> {
 
         let bounds: BoundingBox = swf_tag.bounds.clone().into();
 
-        let (layout, intrinsic_bounds) = LayoutBox::lower_from_text_spans(
-            &text_spans,
-            context,
-            swf_movie.clone(),
-            bounds.width() - Twips::from_pixels(Self::INTERNAL_PADDING * 2.0),
-            swf_tag.is_word_wrap,
-            swf_tag.is_device_font,
-        );
-        let line_data = get_line_data(&layout);
-
         let has_background = swf_tag.has_border;
         let background_color = 0xFFFFFF; // Default is white
         let has_border = swf_tag.has_border;
@@ -319,8 +313,8 @@ impl<'gc> EditText<'gc> {
                 is_html,
                 drawing: Drawing::new(),
                 object: None,
-                layout,
-                intrinsic_bounds,
+                layout: Default::default(),
+                intrinsic_bounds: Default::default(),
                 bounds,
                 autosize,
                 variable: variable.map(|s| s.to_string_lossy(encoding)),
@@ -330,13 +324,14 @@ impl<'gc> EditText<'gc> {
                 has_focus: false,
                 render_settings: Default::default(),
                 hscroll: 0.0,
-                line_data,
+                line_data: Default::default(),
                 scroll: 1,
+                is_layout_dirty: true,
             },
         ));
 
         if swf_tag.is_auto_size {
-            et.relayout(context);
+            et.relayout(context.gc_context, context.library);
         } else {
             et.redraw_border(context.gc_context);
         }
@@ -417,9 +412,8 @@ impl<'gc> EditText<'gc> {
         let mut edit_text = self.0.write(context.gc_context);
         let default_format = edit_text.text_spans.default_format().clone();
         edit_text.text_spans = FormatSpans::from_text(text.into(), default_format);
+        edit_text.is_layout_dirty = true;
         drop(edit_text);
-
-        self.relayout(context);
 
         Ok(())
     }
@@ -442,10 +436,8 @@ impl<'gc> EditText<'gc> {
             let mut write = self.0.write(context.gc_context);
             let default_format = write.text_spans.default_format().clone();
             write.text_spans = FormatSpans::from_html(text, default_format, write.is_multiline);
+            write.is_layout_dirty = true;
             drop(write);
-
-            self.relayout(context);
-
             Ok(())
         } else {
             self.set_text(text, context)
@@ -480,11 +472,9 @@ impl<'gc> EditText<'gc> {
         context: &mut UpdateContext<'_, 'gc, '_>,
     ) {
         // TODO: Convert to byte indices
-        self.0
-            .write(context.gc_context)
-            .text_spans
-            .set_text_format(from, to, &tf);
-        self.relayout(context);
+        let mut write = self.0.write(context.gc_context);
+        write.text_spans.set_text_format(from, to, &tf);
+        write.is_layout_dirty = true;
     }
 
     pub fn is_editable(self) -> bool {
@@ -504,13 +494,15 @@ impl<'gc> EditText<'gc> {
     }
 
     pub fn set_password(self, is_password: bool, context: &mut UpdateContext<'_, 'gc, '_>) {
-        self.0.write(context.gc_context).is_password = is_password;
-        self.relayout(context);
+        let mut write = self.0.write(context.gc_context);
+        write.is_password = is_password;
+        write.is_layout_dirty = true;
     }
 
     pub fn set_multiline(self, is_multiline: bool, context: &mut UpdateContext<'_, 'gc, '_>) {
-        self.0.write(context.gc_context).is_multiline = is_multiline;
-        self.relayout(context);
+        let mut write = self.0.write(context.gc_context);
+        write.is_multiline = is_multiline;
+        write.is_layout_dirty = true;
     }
 
     pub fn is_selectable(self) -> bool {
@@ -526,8 +518,9 @@ impl<'gc> EditText<'gc> {
     }
 
     pub fn set_word_wrap(self, is_word_wrap: bool, context: &mut UpdateContext<'_, 'gc, '_>) {
-        self.0.write(context.gc_context).is_word_wrap = is_word_wrap;
-        self.relayout(context);
+        let mut write = self.0.write(context.gc_context);
+        write.is_word_wrap = is_word_wrap;
+        write.is_layout_dirty = true;
     }
 
     pub fn autosize(self) -> AutoSizeMode {
@@ -535,8 +528,9 @@ impl<'gc> EditText<'gc> {
     }
 
     pub fn set_autosize(self, asm: AutoSizeMode, context: &mut UpdateContext<'_, 'gc, '_>) {
-        self.0.write(context.gc_context).autosize = asm;
-        self.relayout(context);
+        let mut write = self.0.write(context.gc_context);
+        write.autosize = asm;
+        write.is_layout_dirty = true;
     }
 
     pub fn has_background(self) -> bool {
@@ -584,8 +578,9 @@ impl<'gc> EditText<'gc> {
         context: &mut UpdateContext<'_, 'gc, '_>,
         is_device_font: bool,
     ) {
-        self.0.write(context.gc_context).is_device_font = is_device_font;
-        self.relayout(context);
+        let mut write = self.0.write(context.gc_context);
+        write.is_device_font = is_device_font;
+        write.is_layout_dirty = true;
     }
 
     pub fn is_html(self) -> bool {
@@ -603,11 +598,9 @@ impl<'gc> EditText<'gc> {
         text: &WStr,
         context: &mut UpdateContext<'_, 'gc, '_>,
     ) {
-        self.0
-            .write(context.gc_context)
-            .text_spans
-            .replace_text(from, to, text, None);
-        self.relayout(context);
+        let mut write = self.0.write(context.gc_context);
+        write.text_spans.replace_text(from, to, text, None);
+        write.is_layout_dirty = true;
     }
 
     /// Construct a base text transform for a particular `EditText` span.
@@ -626,21 +619,6 @@ impl<'gc> EditText<'gc> {
         transform.matrix.ty = baseline_adjustment;
 
         transform
-    }
-
-    pub fn line_width(self) -> Twips {
-        let edit_text = self.0.read();
-        let static_data = &edit_text.static_data;
-
-        let mut base_width = Twips::from_pixels(self.width());
-
-        if let Some(layout) = &static_data.text.layout {
-            base_width -= layout.left_margin;
-            base_width -= layout.indent;
-            base_width -= layout.right_margin;
-        }
-
-        base_width
     }
 
     /// Returns the variable that this text field is bound to.
@@ -757,8 +735,12 @@ impl<'gc> EditText<'gc> {
     /// the text, and no higher-level representation. Specifically, CSS should
     /// have already been calculated and applied to HTML trees lowered into the
     /// text-span representation.
-    fn relayout(self, context: &mut UpdateContext<'_, 'gc, '_>) {
-        let mut edit_text = self.0.write(context.gc_context);
+    fn relayout(self, gc_context: MutationContext<'gc, '_>, library: &Library<'gc>) {
+        let mut edit_text = self.0.write(gc_context);
+        if !edit_text.is_layout_dirty {
+            return;
+        }
+        edit_text.is_layout_dirty = false;
         let autosize = edit_text.autosize;
         let is_word_wrap = edit_text.is_word_wrap;
         let movie = edit_text.static_data.swf.clone();
@@ -774,7 +756,7 @@ impl<'gc> EditText<'gc> {
 
         let (new_layout, intrinsic_bounds) = LayoutBox::lower_from_text_spans(
             &edit_text.text_spans,
-            context,
+            library,
             movie,
             edit_text.bounds.width() - padding,
             is_word_wrap,
@@ -802,22 +784,19 @@ impl<'gc> EditText<'gc> {
                 };
                 edit_text.bounds.set_x(new_x);
                 edit_text.bounds.set_width(width);
-            } else {
-                let width = edit_text.static_data.text.bounds.x_max
-                    - edit_text.static_data.text.bounds.x_min;
-                edit_text.bounds.set_width(width);
             }
             let height = intrinsic_bounds.height() + padding;
             edit_text.bounds.set_height(height);
             drop(edit_text);
-            self.redraw_border(context.gc_context);
+            self.redraw_border(gc_context);
         }
     }
 
     /// Measure the width and height of the `EditText`'s current text load.
     ///
     /// The returned tuple should be interpreted as width, then height.
-    pub fn measure_text(self, _context: &mut UpdateContext<'_, 'gc, '_>) -> (Twips, Twips) {
+    pub fn measure_text(self, context: &mut UpdateContext<'_, 'gc, '_>) -> (Twips, Twips) {
+        self.relayout(context.gc_context, context.library);
         let edit_text = self.0.read();
 
         (
@@ -896,7 +875,7 @@ impl<'gc> EditText<'gc> {
     }
 
     /// Render a layout box, plus its children.
-    fn render_layout_box(self, context: &mut RenderContext<'_, 'gc>, lbox: &LayoutBox<'gc>) {
+    fn render_layout_box(self, context: &mut RenderContext<'_, 'gc, '_>, lbox: &LayoutBox<'gc>) {
         let origin = lbox.bounds().origin();
         context.transform_stack.push(&Transform {
             matrix: Matrix::translate(origin.x(), origin.y()),
@@ -1573,7 +1552,8 @@ impl<'gc> TDisplayObject<'gc> for EditText<'gc> {
         self.redraw_border(gc_context);
     }
 
-    fn width(&self) -> f64 {
+    fn width(&self, context: &mut UpdateContext<'_, 'gc, '_>) -> f64 {
+        self.relayout(context.gc_context, context.library);
         let edit_text = self.0.read();
         edit_text
             .bounds
@@ -1587,12 +1567,14 @@ impl<'gc> TDisplayObject<'gc> for EditText<'gc> {
 
         write.bounds.set_width(Twips::from_pixels(value));
         write.base.base.set_transformed_by_script(true);
+        write.is_layout_dirty = true;
 
         drop(write);
         self.redraw_border(gc_context);
     }
 
-    fn height(&self) -> f64 {
+    fn height(&self, context: &mut UpdateContext<'_, 'gc, '_>) -> f64 {
+        self.relayout(context.gc_context, context.library);
         let edit_text = self.0.read();
         edit_text
             .bounds
@@ -1606,6 +1588,7 @@ impl<'gc> TDisplayObject<'gc> for EditText<'gc> {
 
         write.bounds.set_height(Twips::from_pixels(value));
         write.base.base.set_transformed_by_script(true);
+        write.is_layout_dirty = true;
 
         drop(write);
         self.redraw_border(gc_context);
@@ -1616,7 +1599,8 @@ impl<'gc> TDisplayObject<'gc> for EditText<'gc> {
         self.redraw_border(gc_context);
     }
 
-    fn render_self(&self, context: &mut RenderContext<'_, 'gc>) {
+    fn render_self(&self, context: &mut RenderContext<'_, 'gc, '_>) {
+        self.relayout(context.gc_context, context.library);
         if !self.world_bounds().intersects(&context.stage.view_bounds()) {
             // Off-screen; culled
             return;
