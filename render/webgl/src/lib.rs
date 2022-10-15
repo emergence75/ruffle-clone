@@ -111,6 +111,11 @@ pub struct WebGlRenderBackend {
     msaa_buffers: Option<MsaaBuffers>,
     msaa_sample_count: u32,
 
+    offscreen_framebuffer: WebGlFramebuffer,
+    offscreen_texture: WebGlTexture,
+    offscreen_width: i32,
+    offscreen_height: i32,
+
     color_program: ShaderProgram,
     bitmap_program: ShaderProgram,
     gradient_program: ShaderProgram,
@@ -277,6 +282,58 @@ impl WebGlRenderBackend {
         // Necessary to load RGB textures (alignment defaults to 4).
         gl.pixel_storei(Gl::UNPACK_ALIGNMENT, 1);
 
+        let offscreen_framebuffer = gl
+            .create_framebuffer()
+            .ok_or(Error::UnableToCreateFrameBuffer)?;
+
+        let offscreen_texture = gl
+            .create_texture()
+            .ok_or(Error::UnableToCreateFrameBuffer)?;
+
+        gl.bind_texture(Gl2::TEXTURE_2D, Some(&offscreen_texture));
+        gl.tex_parameteri(Gl2::TEXTURE_2D, Gl2::TEXTURE_MAG_FILTER, Gl::NEAREST as i32);
+        gl.tex_parameteri(Gl2::TEXTURE_2D, Gl2::TEXTURE_MIN_FILTER, Gl::NEAREST as i32);
+        gl.tex_parameteri(
+            Gl2::TEXTURE_2D,
+            Gl2::TEXTURE_WRAP_S,
+            Gl::CLAMP_TO_EDGE as i32,
+        );
+        gl.tex_parameteri(
+            Gl2::TEXTURE_2D,
+            Gl2::TEXTURE_WRAP_T,
+            Gl2::CLAMP_TO_EDGE as i32,
+        );
+
+        gl.tex_image_2d_with_i32_and_i32_and_i32_and_format_and_type_and_opt_u8_array(
+            Gl2::TEXTURE_2D,
+            0,
+            Gl2::RGB as i32,
+            1 as i32,
+            1 as i32,
+            0,
+            Gl2::RGB,
+            Gl2::UNSIGNED_BYTE,
+            None,
+        )
+        .into_js_result()
+        .unwrap(); // TODO `?`
+
+        gl.bind_framebuffer(Gl2::FRAMEBUFFER, Some(&offscreen_framebuffer));
+        gl.framebuffer_texture_2d(
+            Gl2::FRAMEBUFFER,
+            Gl2::COLOR_ATTACHMENT0,
+            Gl2::TEXTURE_2D,
+            Some(&offscreen_texture),
+            0,
+        );
+
+        if gl.check_framebuffer_status(Gl2::FRAMEBUFFER) != Gl2::FRAMEBUFFER_COMPLETE {
+            panic!("can't read from framebuffer")
+        }
+
+        gl.bind_framebuffer(Gl2::FRAMEBUFFER, None);
+        gl.bind_texture(Gl2::TEXTURE_2D, None);
+
         let mut renderer = Self {
             gl,
             gl2,
@@ -284,6 +341,11 @@ impl WebGlRenderBackend {
 
             msaa_buffers: None,
             msaa_sample_count,
+
+            offscreen_framebuffer,
+            offscreen_texture,
+            offscreen_width: 1,
+            offscreen_height: 1,
 
             color_program,
             gradient_program,
@@ -902,18 +964,120 @@ impl WebGlRenderBackend {
             );
         }
     }
+
+    fn begin_frame_offscreen(&mut self, clear: Color, width: u32, height: u32) {
+        self.offscreen_width = width as i32;
+        self.offscreen_height = height as i32;
+
+        self.active_program = std::ptr::null();
+        self.mask_state = MaskState::NoMask;
+        self.num_masks = 0;
+        self.mask_state_dirty = true;
+
+        self.mult_color = None;
+        self.add_color = None;
+
+        self.gl
+            .bind_texture(Gl2::TEXTURE_2D, Some(&self.offscreen_texture));
+        self.gl
+            .tex_image_2d_with_i32_and_i32_and_i32_and_format_and_type_and_opt_u8_array(
+                Gl2::TEXTURE_2D,
+                0,
+                Gl2::RGBA as i32,
+                self.offscreen_width,
+                self.offscreen_height,
+                0,
+                Gl2::RGBA,
+                Gl2::UNSIGNED_BYTE,
+                None,
+            )
+            .into_js_result()
+            .unwrap(); // TODO `?`
+        self.gl.bind_texture(Gl2::TEXTURE_2D, None);
+
+        self.gl
+            .bind_framebuffer(Gl::FRAMEBUFFER, Some(&self.offscreen_framebuffer));
+        if self.gl.check_framebuffer_status(Gl2::FRAMEBUFFER) != Gl2::FRAMEBUFFER_COMPLETE {
+            panic!("can't read from framebuffer")
+        }
+
+        self.gl
+            .viewport(0, 0, self.offscreen_width, self.offscreen_height);
+
+        self.view_matrix = [
+            // note: un-flipped Y
+            [1.0 / (self.offscreen_width as f32 / 2.0), 0.0, 0.0, 0.0],
+            [0.0, 1.0 / (self.offscreen_height as f32 / 2.0), 0.0, 0.0],
+            [0.0, 0.0, 1.0, 0.0],
+            [-1.0, -1.0, 0.0, 1.0],
+        ];
+
+        //self.set_viewport_dimensions(self.offscreen_width as u32, self.offscreen_height as u32);
+
+        self.set_stencil_state();
+        self.gl.clear_color(
+            clear.r as f32 / 255.0,
+            clear.g as f32 / 255.0,
+            clear.b as f32 / 255.0,
+            clear.a as f32 / 255.0,
+        );
+        self.gl.stencil_mask(0xff);
+        self.gl.clear(Gl::COLOR_BUFFER_BIT | Gl::STENCIL_BUFFER_BIT);
+    }
+
+    fn end_frame_offscreen(&mut self) -> Option<Bitmap> {
+        let sz = ((self.offscreen_width * self.offscreen_height) as usize) * 4;
+        let mut pixels: Vec<u8> = vec![0; sz]; // TODO uninitialized?
+        self.gl
+            .read_pixels_with_opt_u8_array(
+                0,
+                0,
+                self.offscreen_width,
+                self.offscreen_height,
+                Gl2::RGBA,
+                Gl2::UNSIGNED_BYTE,
+                Some(&mut pixels),
+            )
+            .into_js_result()
+            .unwrap(); // TODO `?`;
+
+        self.gl.bind_framebuffer(Gl::FRAMEBUFFER, None);
+
+        // HACK: restore viewport here
+        //self.set_viewport_dimensions(self.renderbuffer_width as u32, self.renderbuffer_height as u32);
+        self.view_matrix = [
+            [1.0 / (self.renderbuffer_width as f32 / 2.0), 0.0, 0.0, 0.0],
+            [
+                0.0,
+                -1.0 / (self.renderbuffer_height as f32 / 2.0),
+                0.0,
+                0.0,
+            ],
+            [0.0, 0.0, 1.0, 0.0],
+            [-1.0, 1.0, 0.0, 1.0],
+        ];
+
+        Some(Bitmap::new(
+            self.offscreen_width as u32,
+            self.offscreen_height as u32,
+            BitmapFormat::Rgba,
+            pixels,
+        ))
+    }
 }
 
 impl RenderBackend for WebGlRenderBackend {
     fn render_offscreen(
         &mut self,
-        _handle: BitmapHandle,
-        _width: u32,
-        _height: u32,
-        _commands: CommandList,
-        _clear_color: Color,
+        handle: BitmapHandle,
+        width: u32,
+        height: u32,
+        commands: CommandList,
+        clear_color: Color,
     ) -> Result<Bitmap, ruffle_render::error::Error> {
-        Err(ruffle_render::error::Error::Unimplemented)
+        self.begin_frame_offscreen(clear_color, width, height);
+        commands.execute(self);
+        Ok(self.end_frame_offscreen().unwrap()) // TODO errors
     }
 
     fn viewport_dimensions(&self) -> ViewportDimensions {
