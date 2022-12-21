@@ -9,6 +9,7 @@ use generational_arena::{Arena, Index};
 use js_sys::{Array, Function, JsString, Object, Promise, Uint8Array};
 use ruffle_core::config::Letterbox;
 use ruffle_core::context::UpdateContext;
+use ruffle_core::duration::Duration;
 use ruffle_core::events::{KeyCode, MouseButton, MouseWheelDelta};
 use ruffle_core::external::{
     ExternalInterfaceMethod, ExternalInterfaceProvider, Value as ExternalValue, Value,
@@ -21,7 +22,6 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::sync::Once;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 use std::{cell::RefCell, error::Error, num::NonZeroI32};
 use wasm_bindgen::{prelude::*, JsCast, JsValue};
 use web_sys::{
@@ -985,7 +985,7 @@ impl Ruffle {
                 });
             }
 
-            core.tick(dt);
+            core.tick(Duration::from_millis(dt));
 
             // Render if the core signals a new frame, or if we resized.
             if core.needs_render() || new_dimensions.is_some() {

@@ -25,6 +25,7 @@ use crate::display_object::{
     EditText, InteractiveObject, MovieClip, Stage, StageAlign, StageDisplayState, StageQuality,
     StageScaleMode, TInteractiveObject, WindowMode,
 };
+use crate::duration::Duration;
 use crate::events::{ButtonKeyCode, ClipEvent, ClipEventResult, KeyCode, MouseButton, PlayerEvent};
 use crate::external::Value as ExternalValue;
 use crate::external::{ExternalInterface, ExternalInterfaceProvider};
@@ -54,7 +55,6 @@ use std::ops::DerefMut;
 use std::rc::{Rc, Weak as RcWeak};
 use std::str::FromStr;
 use std::sync::{Arc, Mutex, Weak};
-use std::time::Duration;
 
 /// The newest known Flash Player version, serves as a default to
 /// `player_version`.
@@ -241,7 +241,7 @@ pub struct Player {
     /// Gained by passage of time between host frames, spent by executing SWF frames.
     /// This is how we support custom SWF framerates
     /// and compensate for small lags by "catching up" (up to MAX_FRAMES_PER_TICK).
-    frame_accumulator: f64,
+    frame_accumulator: Duration,
     recent_run_frame_timings: VecDeque<f64>,
 
     /// Faked time passage for fooling hand-written busy-loop FPS limiters.
@@ -261,7 +261,7 @@ pub struct Player {
     instance_counter: i32,
 
     /// Time remaining until the next timer will fire.
-    time_til_next_timer: Option<f64>,
+    time_til_next_timer: Option<Duration>,
 
     /// The instant at which the SWF was launched.
     start_time: Instant,
@@ -451,7 +451,7 @@ impl Player {
         }
     }
 
-    pub fn tick(&mut self, dt: f64) {
+    pub fn tick(&mut self, dt: Duration) {
         // Don't run until preloading is complete.
         // TODO: Eventually we want to stream content similar to the Flash player.
         if !self.audio.is_loading_complete() {
@@ -461,7 +461,7 @@ impl Player {
         if self.is_playing() {
             self.frame_accumulator += dt;
             let frame_rate = self.frame_rate;
-            let frame_time = 1000.0 / frame_rate;
+            let frame_time = Duration::from_millis(1000.0 / frame_rate);
 
             let max_frames_per_tick = self.max_frames_per_tick();
             let mut frame = 0;
@@ -480,7 +480,7 @@ impl Player {
                 // Then we need to actually pass this time, by decreasing frame_accumulator
                 // to delay the future frame.
                 if self.time_offset > 0 {
-                    self.frame_accumulator -= self.time_offset as f64;
+                    self.frame_accumulator -= Duration::from_millis(self.time_offset.into());
                 }
             }
 
@@ -496,46 +496,47 @@ impl Player {
             // Sanity: If we had too many frames to tick, just reset the accumulator
             // to prevent running at turbo speed.
             if self.frame_accumulator >= frame_time {
-                self.frame_accumulator = 0.0;
+                self.frame_accumulator = Duration::ZERO;
             }
 
             // Adjust playback speed for next frame to stay in sync with timeline audio tracks ("stream" sounds).
             let cur_frame_offset = self.frame_accumulator;
-            self.frame_accumulator += self.mutate_with_update_context(|context| {
+
+            let add = self.mutate_with_update_context(|context| {
                 context
                     .audio_manager
                     .audio_skew_time(context.audio, cur_frame_offset)
-                    * 1000.0
             });
+            self.frame_accumulator += add;
 
             self.update_timers(dt);
             self.audio.tick();
         }
     }
 
-    pub fn time_til_next_timer(&self) -> Option<f64> {
+    pub fn time_til_next_timer(&self) -> Option<Duration> {
         self.time_til_next_timer
     }
 
     /// Returns the approximate duration of time until the next frame is due to run.
     /// This is only an approximation to be used for sleep durations.
-    pub fn time_til_next_frame(&self) -> std::time::Duration {
-        let frame_time = 1000.0 / self.frame_rate;
-        let mut dt = if self.frame_accumulator <= 0.0 {
+    pub fn time_til_next_frame(&self) -> Duration {
+        let frame_time = Duration::from_millis(1000.0 / self.frame_rate);
+        let mut dt = if self.frame_accumulator <= Duration::ZERO {
             frame_time
         } else if self.frame_accumulator >= frame_time {
-            0.0
+            Duration::ZERO
         } else {
             frame_time - self.frame_accumulator
         };
 
         if let Some(time_til_next_timer) = self.time_til_next_timer {
-            dt = dt.min(time_til_next_timer)
+            dt = dt.min(&time_til_next_timer)
         }
 
-        dt = dt.max(0.0);
+        dt = dt.max(&Duration::ZERO);
 
-        std::time::Duration::from_micros(dt as u64 * 1000)
+        dt
     }
 
     pub fn is_playing(&self) -> bool {
@@ -1417,7 +1418,7 @@ impl Player {
     }
 
     pub fn run_frame(&mut self) {
-        let frame_time = Duration::from_nanos((750_000_000.0 / self.frame_rate) as u64);
+        let frame_time = Duration::from_nanos(750_000_000.0 / self.frame_rate);
         let (mut execution_limit, may_execute_while_streaming) = match self.load_behavior {
             LoadBehavior::Streaming => (
                 ExecutionLimit::with_max_ops_and_time(10000, frame_time),
@@ -1818,7 +1819,7 @@ impl Player {
 
     /// Update all AVM-based timers (such as created via setInterval).
     /// Returns the approximate amount of time until the next timer tick.
-    pub fn update_timers(&mut self, dt: f64) {
+    pub fn update_timers(&mut self, dt: Duration) {
         self.time_til_next_timer =
             self.mutate_with_update_context(|context| Timers::update_timers(context, dt));
     }
@@ -1921,9 +1922,9 @@ impl PlayerBuilder {
             // Disable script timeout in debug builds by default.
             letterbox: Letterbox::Fullscreen,
             max_execution_duration: Duration::from_secs(if cfg!(debug_assertions) {
-                u64::MAX
+                f64::MAX
             } else {
-                15
+                15.0
             }),
             viewport_width: 550,
             viewport_height: 400,
@@ -2101,7 +2102,7 @@ impl PlayerBuilder {
                 // Timing
                 frame_rate,
                 frame_phase: Default::default(),
-                frame_accumulator: 0.0,
+                frame_accumulator: Duration::ZERO,
                 recent_run_frame_timings: VecDeque::with_capacity(10),
                 start_time: Instant::now(),
                 time_offset: 0,

@@ -2,10 +2,10 @@ use ruffle_core::backend::audio::{
     swf, AudioBackend, AudioMixer, AudioMixerProxy, DecodeError, RegisterError, SoundHandle,
     SoundInstanceHandle, SoundTransform,
 };
+use ruffle_core::duration::Duration;
 use ruffle_core::impl_audio_mixer_backend;
 use ruffle_web_common::JsResult;
 use std::sync::{Arc, RwLock};
-use std::time::Duration;
 use wasm_bindgen::{closure::Closure, prelude::*, JsCast};
 use web_sys::AudioContext;
 
@@ -29,7 +29,7 @@ impl WebAudioBackend {
             mixer: AudioMixer::new(2, sample_rate as u32),
             buffers: Vec::with_capacity(2),
             time: Arc::new(RwLock::new(0.0)),
-            position_resolution: Duration::from_secs_f64(
+            position_resolution: Duration::from_secs(
                 f64::from(Self::BUFFER_SIZE) / f64::from(sample_rate),
             ),
         };

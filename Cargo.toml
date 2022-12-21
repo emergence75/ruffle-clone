@@ -20,7 +20,6 @@ members = [
     "video",
     "video/software",
 
-    "tests",
     "tests/input-format",
 ]
 resolver = "2"

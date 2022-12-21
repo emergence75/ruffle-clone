@@ -18,6 +18,7 @@ use crate::context::{ActionQueue, ActionType, UpdateContext};
 use crate::display_object::{
     Bitmap, DisplayObject, TDisplayObject, TDisplayObjectContainer, TInteractiveObject,
 };
+use crate::duration::Duration;
 use crate::events::ClipEvent;
 use crate::frame_lifecycle::catchup_display_object_to_frame;
 use crate::limits::ExecutionLimit;
@@ -32,7 +33,6 @@ use ruffle_render::utils::{determine_jpeg_tag_format, JpegTagFormat};
 use std::fmt;
 use std::str::FromStr;
 use std::sync::{Arc, Mutex, Weak};
-use std::time::Duration;
 use swf::read::{extract_swz, read_compression_type};
 use thiserror::Error;
 use url::form_urlencoded;
@@ -1162,7 +1162,7 @@ impl<'gc> Loader<'gc> {
                         let duration = uc
                             .audio
                             .get_sound_duration(handle)
-                            .map(|d| d.round() as u32);
+                            .map(|d| d.as_millis().round() as u32);
                         sound_object.set_duration(uc.gc_context, duration);
                         Ok(())
                     })
@@ -1417,7 +1417,10 @@ impl<'gc> Loader<'gc> {
                     Loader::preload_tick(
                         handle,
                         uc,
-                        &mut ExecutionLimit::with_max_ops_and_time(10000, Duration::from_millis(1)),
+                        &mut ExecutionLimit::with_max_ops_and_time(
+                            10000,
+                            Duration::from_millis(1.0),
+                        ),
                     )?;
 
                     return Ok(());
