@@ -1630,6 +1630,7 @@ impl Player {
                 is_offscreen: false,
                 use_bitmap_cache: true,
                 stage,
+                stub_tracker: &mut self.stub_tracker,
             };
 
             stage.render(&mut render_context);
