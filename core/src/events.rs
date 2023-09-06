@@ -36,6 +36,20 @@ pub enum PlayerEvent {
     TextControl {
         code: TextControlCode,
     },
+    GeolocationPermissionChange {
+        status: PermissionStatus,
+    },
+    GeolocationUpdate {
+        latitude: f64,
+        longitude: f64,
+        altitude: f64,
+        // Usually horizontalAccuracy and verticalAccuracy are the same
+        horizontal_accuracy: f64,
+        vertical_accuracy: f64,
+        speed: f64,
+        heading: f64,
+        timestamp: f64,
+    },
 }
 
 /// The distance scrolled by the mouse wheel.
@@ -641,4 +655,29 @@ pub fn key_code_to_button_key_code(key_code: KeyCode) -> Option<ButtonKeyCode> {
         _ => return None,
     };
     Some(out)
+}
+
+/// An enumeration of constant values that specify the authorization status of a permission
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PermissionStatus {
+    /// Specifies that the permission has been denied.
+    Denied,
+    /// Specifies that the permission has been granted.
+    Granted,
+    /// Specifies that the permission has been granted only when App is in use.
+    OnlyWhenInUse,
+    /// Specifies that the permission hasn't been requested yet.
+    Unknown,
+}
+
+// According to flash.permissions.PermissionStatus
+impl PermissionStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            PermissionStatus::Denied => "denied",
+            PermissionStatus::Granted => "granted",
+            PermissionStatus::OnlyWhenInUse => "onlyWhenInUse",
+            PermissionStatus::Unknown => "unknown",
+        }
+    }
 }

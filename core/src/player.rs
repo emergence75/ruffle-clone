@@ -12,6 +12,7 @@ use crate::avm2::{
 };
 use crate::backend::{
     audio::{AudioBackend, AudioManager},
+    geolocation::{GeolocationBackend, GeolocationInstances},
     log::LogBackend,
     navigator::{NavigatorBackend, Request},
     storage::StorageBackend,
@@ -29,7 +30,9 @@ use crate::display_object::{
     EditText, InteractiveObject, MovieClip, Stage, StageAlign, StageDisplayState, StageScaleMode,
     TInteractiveObject, WindowMode,
 };
-use crate::events::{ButtonKeyCode, ClipEvent, ClipEventResult, KeyCode, MouseButton, PlayerEvent};
+use crate::events::{
+    ButtonKeyCode, ClipEvent, ClipEventResult, KeyCode, MouseButton, PermissionStatus, PlayerEvent,
+};
 use crate::external::{ExternalInterface, ExternalInterfaceProvider, NullFsCommandProvider};
 use crate::external::{FsCommandProvider, Value as ExternalValue};
 use crate::focus_tracker::FocusTracker;
@@ -155,6 +158,9 @@ struct GcRootData<'gc> {
     /// A tracker for the current keyboard focused element
     focus_tracker: FocusTracker<'gc>,
 
+    // Instances of Geolocation class from AS to dispathes corresponding events.
+    geolocation_instances: GeolocationInstances<'gc>,
+
     /// Manager of active sound instances.
     audio_manager: AudioManager<'gc>,
 
@@ -221,6 +227,7 @@ type GcArena = gc_arena::Arena<Rootable![GcRoot<'_>]>;
 type Audio = Box<dyn AudioBackend>;
 type Navigator = Box<dyn NavigatorBackend>;
 type Renderer = Box<dyn RenderBackend>;
+type Geolocation = Box<dyn GeolocationBackend>;
 type Storage = Box<dyn StorageBackend>;
 type Log = Box<dyn LogBackend>;
 type Ui = Box<dyn UiBackend>;
@@ -247,6 +254,7 @@ pub struct Player {
     renderer: Renderer,
     audio: Audio,
     navigator: Navigator,
+    geolocation: Geolocation,
     storage: Storage,
     log: Log,
     ui: Ui,
@@ -785,6 +793,18 @@ impl Player {
         });
     }
 
+    pub fn set_geolocation_status(&mut self, status: String) {
+        self.mutate_with_update_context(|context| {
+            context
+                .geolocation
+                .set_geolocation_permission_status(status)
+        });
+    }
+
+    pub fn geolocation_update_interval(&self) -> f64 {
+        self.geolocation.geolocation_update_interval()
+    }
+
     fn toggle_play_root_movie(context: &mut UpdateContext<'_, '_>) {
         if let Some(mc) = context
             .stage
@@ -1094,6 +1114,99 @@ impl Player {
                         .expect("DisplayObject is not an object!");
 
                     Avm2::dispatch_event(&mut activation.context, keyboard_event, target);
+                }
+
+                if let PlayerEvent::GeolocationPermissionChange { status } = event {
+                    let mut activation = Avm2Activation::from_nothing(context.reborrow());
+                    let target = activation.context.geolocation_instances.get().unwrap();
+
+                    let code = if status == PermissionStatus::Granted {
+                        "Geolocation.Unmuted"
+                    } else {
+                        "Geolocation.Muted"
+                    };
+                    let level = "status"; // always the same
+
+                    // StatusEvent
+                    let event_name_val: Avm2Value<'_> =
+                        AvmString::new_utf8(activation.context.gc_context, "status").into();
+
+                    let status_cls = activation.avm2().classes().statusevent;
+                    let status_event = status_cls
+                        .construct(
+                            &mut activation,
+                            &[
+                                event_name_val, /* type */
+                                false.into(),   /* bubbles */
+                                false.into(),   /* cancelable */
+                                code.into(),    /* code */
+                                level.into(),   /* level */
+                            ],
+                        )
+                        .expect("Failed to construct StatusEvent");
+
+                    tracing::debug!("Got StatusEvent: code = {}, level = {}", code, level);
+
+                    // PermissionEvent
+                    let event_name_val: Avm2Value<'_> =
+                        AvmString::new_utf8(activation.context.gc_context, "permissionStatus")
+                            .into();
+                    let p_status_cls = activation.avm2().classes().permissionevent;
+                    let p_status_event = p_status_cls
+                        .construct(
+                            &mut activation,
+                            &[
+                                event_name_val,         /* type */
+                                false.into(),           /* bubbles */
+                                false.into(),           /* cancelable */
+                                status.as_str().into(), /* status */
+                            ],
+                        )
+                        .expect("Failed to construct PermissionEvent");
+                    tracing::debug!("Got PermissionEvent: status = {}", status.as_str());
+
+                    Avm2::dispatch_event(&mut activation.context, status_event, target);
+                    Avm2::dispatch_event(&mut activation.context, p_status_event, target);
+                }
+
+                if let PlayerEvent::GeolocationUpdate {
+                    latitude,
+                    longitude,
+                    altitude,
+                    horizontal_accuracy,
+                    vertical_accuracy,
+                    speed,
+                    heading,
+                    timestamp,
+                } = event
+                {
+                    let mut activation = Avm2Activation::from_nothing(context.reborrow());
+                    let target = activation.context.geolocation_instances.get().unwrap();
+
+                    let event_name_val: Avm2Value<'_> =
+                        AvmString::new_utf8(activation.context.gc_context, "update").into();
+                    let geolocation_event_cls = activation.avm2().classes().geolocationevent;
+                    let geolocation_event = geolocation_event_cls
+                        .construct(
+                            &mut activation,
+                            &[
+                                event_name_val,             /* type */
+                                false.into(),               /* bubbles */
+                                false.into(),               /* cancelable */
+                                latitude.into(),            /* latitude */
+                                longitude.into(),           /* longitude */
+                                altitude.into(),            /* altitude */
+                                horizontal_accuracy.into(), /* horizontalAccuracy */
+                                vertical_accuracy.into(),   /* verticalAccuracy */
+                                speed.into(),               /* speed */
+                                heading.into(),             /* heading */
+                                timestamp.into(),           /* timestamp */
+                            ],
+                        )
+                        .expect("Failed to construct GeolocationEvent");
+                    tracing::debug!("Got GeolocationEvent: status = {:?}", event);
+
+                    Avm2::dispatch_event(&mut activation.context, geolocation_event, target);
                 }
             }
 
@@ -1867,6 +1980,7 @@ impl Player {
             let mouse_hovered_object = root_data.mouse_hovered_object;
             let mouse_pressed_object = root_data.mouse_pressed_object;
             let focus_tracker = root_data.focus_tracker;
+            let geolocation_instances = root_data.geolocation_instances;
 
             #[allow(unused_variables)]
             let (
@@ -1898,6 +2012,7 @@ impl Player {
                 renderer: self.renderer.deref_mut(),
                 audio: self.audio.deref_mut(),
                 navigator: self.navigator.deref_mut(),
+                geolocation: self.geolocation.deref_mut(),
                 ui: self.ui.deref_mut(),
                 action_queue,
                 gc_context,
@@ -1928,6 +2043,7 @@ impl Player {
                 update_start: Instant::now(),
                 max_execution_duration: self.max_execution_duration,
                 focus_tracker,
+                geolocation_instances,
                 times_get_time_called: 0,
                 time_offset: &mut self.time_offset,
                 audio_manager,
@@ -2137,6 +2253,7 @@ pub struct PlayerBuilder {
     log: Option<Log>,
     navigator: Option<Navigator>,
     renderer: Option<Renderer>,
+    geolocation: Option<Geolocation>,
     storage: Option<Storage>,
     ui: Option<Ui>,
     video: Option<Video>,
@@ -2178,6 +2295,7 @@ impl PlayerBuilder {
             log: None,
             navigator: None,
             renderer: None,
+            geolocation: None,
             storage: None,
             ui: None,
             video: None,
@@ -2242,6 +2360,13 @@ impl PlayerBuilder {
     #[inline]
     pub fn with_renderer(mut self, renderer: impl 'static + RenderBackend) -> Self {
         self.renderer = Some(Box::new(renderer));
+        self
+    }
+
+    /// Sets the storage backend of the player.
+    #[inline]
+    pub fn with_geolocation(mut self, geolocation: impl 'static + GeolocationBackend) -> Self {
+        self.geolocation = Some(Box::new(geolocation));
         self
     }
 
@@ -2409,6 +2534,7 @@ impl PlayerBuilder {
                         fs_command_provider,
                     ),
                     focus_tracker: FocusTracker::new(gc_context),
+                    geolocation_instances: GeolocationInstances::new(gc_context),
                     library: Library::empty(),
                     load_manager: LoadManager::new(),
                     mouse_hovered_object: None,
@@ -2446,6 +2572,9 @@ impl PlayerBuilder {
                 scale_factor: self.viewport_scale_factor,
             }))
         });
+        let geolocation = self
+            .geolocation
+            .unwrap_or_else(|| Box::new(geolocation::NullGeolocationBackend::new()));
         let storage = self
             .storage
             .unwrap_or_else(|| Box::new(storage::MemoryStorageBackend::new()));
@@ -2469,6 +2598,7 @@ impl PlayerBuilder {
                 log,
                 navigator,
                 renderer,
+                geolocation,
                 storage,
                 ui,
                 video,
