@@ -446,7 +446,7 @@ impl<'gc> ClassObject<'gc> {
                 activation,
                 class_initializer,
                 scope,
-                Some(object),
+                Some(object.into()),
                 Some(self),
             );
 
@@ -553,7 +553,7 @@ impl<'gc> ClassObject<'gc> {
     pub fn call_super(
         self,
         multiname: &Multiname<'gc>,
-        receiver: Object<'gc>,
+        receiver: Value<'gc>,
         arguments: &[Value<'gc>],
         activation: &mut Activation<'_, 'gc>,
     ) -> Result<Value<'gc>, Error<'gc>> {
@@ -586,7 +586,7 @@ impl<'gc> ClassObject<'gc> {
             let callee =
                 FunctionObject::from_method(activation, method, scope, Some(receiver), Some(class));
 
-            callee.call(receiver.into(), arguments, activation)
+            callee.call(receiver, arguments, activation)
         } else {
             receiver.call_property(multiname, arguments, activation)
         }
@@ -619,7 +619,7 @@ impl<'gc> ClassObject<'gc> {
     pub fn get_super(
         self,
         multiname: &Multiname<'gc>,
-        receiver: Object<'gc>,
+        receiver: Value<'gc>,
         activation: &mut Activation<'_, 'gc>,
     ) -> Result<Value<'gc>, Error<'gc>> {
         let property = self.instance_vtable().get_trait(multiname);
@@ -647,7 +647,7 @@ impl<'gc> ClassObject<'gc> {
 
                 // We call getters, but return the actual function object for normal methods
                 if matches!(property, Some(Property::Virtual { .. })) {
-                    callee.call(receiver.into(), &[], activation)
+                    callee.call(receiver, &[], activation)
                 } else {
                     Ok(callee.into())
                 }
@@ -697,7 +697,7 @@ impl<'gc> ClassObject<'gc> {
         self,
         multiname: &Multiname<'gc>,
         value: Value<'gc>,
-        mut receiver: Object<'gc>,
+        mut receiver: Value<'gc>,
         activation: &mut Activation<'_, 'gc>,
     ) -> Result<(), Error<'gc>> {
         let property = self.instance_vtable().get_trait(multiname);
@@ -722,7 +722,7 @@ impl<'gc> ClassObject<'gc> {
                 let callee =
                     FunctionObject::from_method(activation, method, scope, Some(receiver), Some(class));
 
-                callee.call(receiver.into(), &[value], activation)?;
+                callee.call(receiver, &[value], activation)?;
                 Ok(())
             }
             Some(Property::Slot { .. }) => {
