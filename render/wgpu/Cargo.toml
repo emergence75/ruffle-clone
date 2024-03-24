@@ -16,11 +16,11 @@ tracing = { workspace = true }
 ruffle_render = { path = "..", features = ["tessellator", "wgpu"] }
 bytemuck = { version = "1.15.0", features = ["derive"] }
 raw-window-handle = "0.6.0"
-clap = { version = "4.5.2", features = ["derive"], optional = true }
+clap = { version = "4.5.3", features = ["derive"], optional = true }
 enum-map = "2.7.3"
 fnv = "1.0.7"
 swf = { path = "../../swf" }
-image = { version = "0.24.9", default-features = false }
+image = { version = "0.25.0", default-features = false }
 naga_oil = { workspace = true }
 naga-agal = { path = "../naga-agal" }
 naga-pixelbender = { path = "../naga-pixelbender" }
