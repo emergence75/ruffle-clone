@@ -992,21 +992,11 @@ impl Player {
                 _ => None,
             };
 
-            let mut key_press_handled = false;
-            if let Some(button_event) = button_event {
-                for level in context.stage.iter_render_list() {
-                    let state = if let Some(interactive) = level.as_interactive() {
-                        interactive.handle_clip_event(context, button_event)
-                    } else {
-                        ClipEventResult::NotHandled
-                    };
-
-                    if state == ClipEventResult::Handled {
-                        key_press_handled = true;
-                        break;
-                    }
-                }
-            }
+            let key_press_handled = if let Some(button_event) = button_event {
+                context.stage.handle_clip_event(context, button_event) == ClipEventResult::Handled
+            } else {
+                false
+            };
 
             if let PlayerEvent::KeyDown { key_code, key_char }
             | PlayerEvent::KeyUp { key_code, key_char } = event
@@ -1188,6 +1178,17 @@ impl Player {
             if self.update_mouse_state(is_mouse_button_changed, true) {
                 self.needs_render = true;
             }
+        }
+
+        if let PlayerEvent::KeyDown {
+            key_code: KeyCode::Tab,
+            ..
+        } = event
+        {
+            self.mutate_with_update_context(|context| {
+                let tracker = context.focus_tracker;
+                tracker.cycle(context);
+            });
         }
     }
 
