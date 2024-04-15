@@ -15,6 +15,7 @@ use crate::display_object::interactive::{
 };
 use crate::display_object::{render_base, DisplayObjectBase, DisplayObjectPtr};
 use crate::events::{ClipEvent, ClipEventResult};
+use crate::focus_tracker::FocusTracker;
 use crate::prelude::*;
 use crate::string::{FromWStr, WStr};
 use crate::tag_utils::SwfMovie;
@@ -122,7 +123,7 @@ pub struct StageData<'gc> {
     #[collect(require_static)]
     window_mode: WindowMode,
 
-    /// Whether or not objects display a glowing border when they have focus.
+    /// Whether objects display a glowing border when they have focus.
     stage_focus_rect: bool,
 
     /// Whether to show default context menu items
@@ -147,6 +148,9 @@ pub struct StageData<'gc> {
     /// identity matrix unless explicitly set from ActionScript)
     #[collect(require_static)]
     viewport_matrix: Matrix,
+
+    /// A tracker for the current keyboard focused element
+    focus_tracker: FocusTracker<'gc>,
 }
 
 impl<'gc> Stage<'gc> {
@@ -184,6 +188,7 @@ impl<'gc> Stage<'gc> {
                 stage3ds: vec![],
                 movie,
                 viewport_matrix: Matrix::IDENTITY,
+                focus_tracker: FocusTracker::new(gc_context),
             },
         ));
         stage.set_is_root(gc_context, true);
@@ -282,21 +287,16 @@ impl<'gc> Stage<'gc> {
         Ref::map(self.0.read(), |this| &this.stage3ds)
     }
 
-    /// Get the boolean flag which determines whether or not objects display a glowing border
+    /// Get the boolean flag which determines whether objects display a glowing border
     /// when they have focus.
-    ///
-    /// This setting is currently ignored in Ruffle.
     pub fn stage_focus_rect(self) -> bool {
         self.0.read().stage_focus_rect
     }
 
-    /// Set the boolean flag which determines whether or not objects display a glowing border
+    /// Set the boolean flag which determines whether objects display a glowing border
     /// when they have focus.
-    ///
-    /// This setting is currently ignored in Ruffle.
-    pub fn set_stage_focus_rect(self, gc_context: &Mutation<'gc>, fr: bool) {
-        let mut this = self.0.write(gc_context);
-        this.stage_focus_rect = fr
+    pub fn set_stage_focus_rect(self, gc_context: &Mutation<'gc>, value: bool) {
+        self.0.write(gc_context).stage_focus_rect = value
     }
 
     /// Get the size of the stage.
@@ -732,6 +732,10 @@ impl<'gc> Stage<'gc> {
             Avm2::dispatch_event(context, full_screen_event, stage);
         }
     }
+
+    pub fn focus_tracker(&self) -> FocusTracker<'gc> {
+        self.0.read().focus_tracker
+    }
 }
 
 impl<'gc> TDisplayObject<'gc> for Stage<'gc> {
@@ -837,6 +841,8 @@ impl<'gc> TDisplayObject<'gc> for Stage<'gc> {
         }
 
         render_base((*self).into(), context);
+
+        self.focus_tracker().render_highlight(context);
 
         if self.should_letterbox() {
             self.draw_letterbox(context);

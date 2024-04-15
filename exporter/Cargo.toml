@@ -12,12 +12,11 @@ workspace = true
 
 [dependencies]
 clap = { workspace = true }
-futures = "0.3"
+futures = { workspace = true }
 ruffle_core = { path = "../core", features = ["deterministic", "default_font"] }
 ruffle_render_wgpu = { path = "../render/wgpu", features = ["clap"] }
-image = { version = "0.25.0", default-features = false, features = ["png"] }
-log = "0.4"
-walkdir = "2.5.0"
+image = { workspace = true, features = ["png"] }
+walkdir = { workspace = true }
 indicatif = "0.17"
 rayon = "1.10.0"
 anyhow = { workspace = true }

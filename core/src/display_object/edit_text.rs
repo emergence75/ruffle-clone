@@ -2347,8 +2347,17 @@ impl<'gc> TDisplayObject<'gc> for EditText<'gc> {
         true
     }
 
-    fn is_tab_enabled(&self, context: &mut UpdateContext<'_, 'gc>) -> bool {
-        self.get_avm1_boolean_property(context, "tabEnabled", true)
+    fn is_highlightable(&self, _context: &mut UpdateContext<'_, 'gc>) -> bool {
+        // TextField is incapable of rendering a highlight.
+        false
+    }
+
+    fn is_tabbable(&self, context: &mut UpdateContext<'_, 'gc>) -> bool {
+        if !self.is_editable() {
+            // Non-editable text fields are never tabbable.
+            return false;
+        }
+        self.get_avm1_boolean_property(context, "tabEnabled", |_| true)
     }
 
     fn tab_index(&self) -> Option<i64> {

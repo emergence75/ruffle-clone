@@ -1,9 +1,8 @@
 use crate::backends::{
     CpalAudioBackend, DesktopExternalInterfaceProvider, DesktopFSCommandProvider, DesktopUiBackend,
-    DiskStorageBackend, ExternalNavigatorBackend,
+    RfdNavigatorInterface,
 };
 use crate::custom_event::RuffleEvent;
-use crate::executor::WinitAsyncExecutor;
 use crate::gui::MovieView;
 use crate::preferences::GlobalPreferences;
 use crate::{CALLSTACK, RENDER_INFO, SWF_INFO};
@@ -15,18 +14,22 @@ use ruffle_core::{
     DefaultFont, LoadBehavior, Player, PlayerBuilder, PlayerEvent, PlayerRuntime, StageAlign,
     StageScaleMode,
 };
+use ruffle_frontend_utils::backends::executor::{AsyncExecutor, PollRequester};
+use ruffle_frontend_utils::backends::navigator::ExternalNavigatorBackend;
+use ruffle_frontend_utils::bundle::source::BundleSourceError;
+use ruffle_frontend_utils::bundle::{Bundle, BundleError};
+use ruffle_frontend_utils::content::PlayingContent;
 use ruffle_render::backend::RenderBackend;
 use ruffle_render::quality::StageQuality;
 use ruffle_render_wgpu::backend::WgpuRenderBackend;
 use ruffle_render_wgpu::descriptors::Descriptors;
-use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
+use std::fmt::Debug;
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 use url::Url;
-use urlencoding::decode;
 use winit::event_loop::EventLoopProxy;
 use winit::window::Window;
 
@@ -93,11 +96,22 @@ impl From<&GlobalPreferences> for PlayerOptions {
     }
 }
 
+#[derive(Clone)]
+struct WinitWaker(EventLoopProxy<RuffleEvent>);
+
+impl PollRequester for WinitWaker {
+    fn request_poll(&self) {
+        if self.0.send_event(RuffleEvent::TaskPoll).is_err() {
+            tracing::error!("Couldn't request poll - event loop is closed");
+        }
+    }
+}
+
 /// Represents a current Player and any associated state with that player,
 /// which may be lost when this Player is closed (dropped)
 struct ActivePlayer {
     player: Arc<Mutex<Player>>,
-    executor: Arc<WinitAsyncExecutor>,
+    executor: Arc<AsyncExecutor<WinitWaker>>,
 }
 
 impl ActivePlayer {
@@ -123,7 +137,37 @@ impl ActivePlayer {
             }
         };
 
-        let (executor, future_spawner) = WinitAsyncExecutor::new(event_loop.clone());
+        let mut content = PlayingContent::DirectFile(movie_url.clone());
+        if movie_url.scheme() == "file" {
+            if let Ok(path) = movie_url.to_file_path() {
+                match Bundle::from_path(&path) {
+                    Ok(bundle) => {
+                        if bundle.warnings().is_empty() {
+                            tracing::info!("Opening bundle at {path:?}");
+                        } else {
+                            // TODO: Show warnings to user (toast?)
+                            tracing::warn!("Opening bundle at {path:?} with warnings");
+                            for warning in bundle.warnings() {
+                                tracing::warn!("{warning}");
+                            }
+                        }
+                        content = PlayingContent::Bundle(movie_url.clone(), bundle);
+                    }
+                    Err(BundleError::BundleDoesntExist)
+                    | Err(BundleError::InvalidSource(BundleSourceError::UnknownSource)) => {
+                        // Do nothing and carry on opening it as a swf - this likely isn't a bundle at all
+                    }
+                    Err(e) => {
+                        // TODO: Visible popup when a bundle (or regular file) fails to open
+                        tracing::error!("Couldn't open bundle at {path:?}: {e}");
+                    }
+                }
+            }
+        }
+
+        let (executor, future_spawner) = AsyncExecutor::new(WinitWaker(event_loop.clone()));
+        let movie_url = content.initial_swf_url().clone();
+        let readable_name = content.name();
         let navigator = ExternalNavigatorBackend::new(
             opt.base.to_owned().unwrap_or_else(|| movie_url.clone()),
             future_spawner,
@@ -132,6 +176,8 @@ impl ActivePlayer {
             opt.open_url_mode,
             opt.socket_allowed.clone(),
             opt.tcp_connections,
+            Rc::new(content),
+            RfdNavigatorInterface,
         );
 
         if cfg!(feature = "software_video") {
@@ -163,7 +209,7 @@ impl ActivePlayer {
         builder = builder
             .with_navigator(navigator)
             .with_renderer(renderer)
-            .with_storage(DiskStorageBackend::new(opt.save_directory.clone()))
+            .with_storage(preferences.storage_backend().create_backend(opt))
             .with_fs_commands(Box::new(DesktopFSCommandProvider {
                 event_loop: event_loop.clone(),
                 window: window.clone(),
@@ -193,17 +239,9 @@ impl ActivePlayer {
             .with_avm2_optimizer_enabled(opt.avm2_optimizer_enabled);
         let player = builder.build();
 
-        let name = movie_url
-            .path_segments()
-            .and_then(|segments| segments.last())
-            .unwrap_or_else(|| movie_url.as_str())
-            .to_string();
-
-        let readable_name = decode(&name).unwrap_or(Cow::Borrowed(&name));
-
         window.set_title(&format!("Ruffle - {readable_name}"));
 
-        SWF_INFO.with(|i| *i.borrow_mut() = Some(name.clone()));
+        SWF_INFO.with(|i| *i.borrow_mut() = Some(readable_name));
 
         let on_metadata = move |swf_header: &ruffle_core::swf::HeaderExt| {
             let _ = event_loop.send_event(RuffleEvent::OnMetadata(swf_header.clone()));

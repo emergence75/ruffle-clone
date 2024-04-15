@@ -1,13 +1,14 @@
 use crate::avm2::activation::Activation;
 use crate::avm2::class::Class;
-use crate::avm2::method::BytecodeMethod;
+use crate::avm2::method::{BytecodeMethod, ResolvedParamConfig};
 use crate::avm2::multiname::Multiname;
 use crate::avm2::object::ClassObject;
 use crate::avm2::op::Op;
 use crate::avm2::property::Property;
+use crate::avm2::verify::JumpSources;
 
 use gc_arena::{Gc, GcCell};
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 #[derive(Clone, Copy, Debug)]
 struct OptValue<'gc> {
@@ -86,6 +87,10 @@ impl<'gc> Locals<'gc> {
     fn at(&self, index: usize) -> OptValue<'gc> {
         self.0[index]
     }
+
+    fn len(&self) -> usize {
+        self.0.len()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -146,7 +151,9 @@ pub fn optimize<'gc>(
     activation: &mut Activation<'_, 'gc>,
     method: &BytecodeMethod<'gc>,
     code: &mut Vec<Op<'gc>>,
-    jump_targets: HashSet<i32>,
+    resolved_parameters: &[ResolvedParamConfig<'gc>],
+    return_type: Option<GcCell<'gc, Class<'gc>>>,
+    jump_targets: HashMap<i32, JumpSources>,
 ) {
     // These make the code less readable
     #![allow(clippy::manual_filter)]
@@ -164,6 +171,7 @@ pub fn optimize<'gc>(
         pub array: ClassObject<'gc>,
         pub function: ClassObject<'gc>,
         pub void: ClassObject<'gc>,
+        pub namespace: ClassObject<'gc>,
     }
     let types = Types {
         object: activation.avm2().classes().object,
@@ -176,6 +184,7 @@ pub fn optimize<'gc>(
         array: activation.avm2().classes().array,
         function: activation.avm2().classes().function,
         void: activation.avm2().classes().void,
+        namespace: activation.avm2().classes().namespace,
     };
 
     let method_body = method
@@ -196,22 +205,10 @@ pub fn optimize<'gc>(
         None
     };
 
-    // TODO: Store these argument types somewhere on the function so they don't
-    // have to be re-resolved every function call
-    let mut argument_types = Vec::new();
-    for argument in &method.signature {
-        let type_name = &argument.param_type_name;
-
-        let argument_type = if !type_name.has_lazy_component() {
-            activation
-                .domain()
-                .get_class(type_name, activation.context.gc_context)
-        } else {
-            None
-        };
-
-        argument_types.push(argument_type);
-    }
+    let argument_types = resolved_parameters
+        .iter()
+        .map(|arg| arg.param_type)
+        .collect::<Vec<_>>();
 
     // Initial set of local types
     let mut initial_local_types = Locals::new(method_body.num_locals as usize);
@@ -251,18 +248,72 @@ pub fn optimize<'gc>(
         }
     }
 
+    // TODO: Fill out all ops, then add scope stack and stack merging, too
+    let mut state_map: HashMap<i32, Locals<'gc>> = HashMap::new();
+
     let mut stack = Stack::new();
     let mut scope_stack = Stack::new();
     let mut local_types = initial_local_types.clone();
+    let mut last_op_was_block_terminating = false;
 
     for (i, op) in code.iter_mut().enumerate() {
-        if jump_targets.contains(&(i as i32)) {
+        if let Some(jump_sources) = jump_targets.get(&(i as i32)) {
+            if let JumpSources::Known(sources) = jump_sources {
+                // Avoid handling multiple sources for now
+                if sources.len() == 1 {
+                    // We can merge the locals easily, now
+                    let source_i = sources[0];
+
+                    if let Some(source_local_types) = state_map.get(&source_i) {
+                        let mut merged_types = initial_local_types.clone();
+                        assert_eq!(source_local_types.len(), local_types.len());
+
+                        if last_op_was_block_terminating {
+                            // If the last op was a block-terminating op, the
+                            // only possible way this is reachable is from
+                            // the jump. Just set the types to the types
+                            // at the jump.
+                            merged_types = source_local_types.clone();
+                        } else {
+                            for (i, target_local) in local_types.0.iter().enumerate() {
+                                let source_local = source_local_types.at(i);
+                                // TODO: Check superclasses, too
+                                if let (Some(source_local_class), Some(target_local_class)) =
+                                    (source_local.class, target_local.class)
+                                {
+                                    if GcCell::ptr_eq(
+                                        source_local_class.inner_class_definition(),
+                                        target_local_class.inner_class_definition(),
+                                    ) {
+                                        merged_types.set(i, OptValue::of_type(source_local_class));
+                                    }
+                                }
+                            }
+                        }
+
+                        local_types = merged_types;
+                    } else {
+                        local_types = initial_local_types.clone();
+                    }
+                } else {
+                    local_types = initial_local_types.clone();
+                }
+            } else {
+                local_types = initial_local_types.clone();
+            }
+
             stack.clear();
             scope_stack.clear();
-            local_types = initial_local_types.clone();
         }
 
+        last_op_was_block_terminating = false;
+
         match op {
+            Op::CoerceA => {
+                // This does actually inhibit optimizations in FP
+                stack.pop();
+                stack.push_any();
+            }
             Op::CoerceB => {
                 let stack_value = stack.pop_or_any();
                 if stack_value.class == Some(types.boolean) {
@@ -288,18 +339,16 @@ pub fn optimize<'gc>(
                 }
                 stack.push_class_object(types.int);
             }
-            Op::CoerceU => {
-                let stack_value = stack.pop_or_any();
-                // TODO: maybe the type check is safe here...?
-                if stack_value.contains_valid_unsigned {
-                    *op = Op::Nop;
-                }
-                stack.push_class_object(types.uint);
-            }
-            Op::CoerceA => {
-                // This does actually inhibit optimizations in FP
+            Op::CoerceO => {
                 stack.pop();
-                stack.push_any();
+
+                stack.push_class_object(types.object);
+            }
+            Op::ConvertO => {
+                // This has no stack effect that code can notice:
+                // either it will push the value back on the stack
+                // (no difference) or it will throw an error (which
+                // will clear the stack).
             }
             Op::CoerceS => {
                 let stack_value = stack.pop_or_any();
@@ -307,6 +356,18 @@ pub fn optimize<'gc>(
                     *op = Op::Nop;
                 }
                 stack.push_class_object(types.string);
+            }
+            Op::ConvertS => {
+                stack.pop();
+                stack.push_class_object(types.string);
+            }
+            Op::CoerceU => {
+                let stack_value = stack.pop_or_any();
+                // TODO: maybe the type check is safe here...?
+                if stack_value.contains_valid_unsigned {
+                    *op = Op::Nop;
+                }
+                stack.push_class_object(types.uint);
             }
             Op::Equals
             | Op::StrictEquals
@@ -363,6 +424,13 @@ pub fn optimize<'gc>(
                 }
                 stack.push(new_value);
             }
+            Op::PushUint { value } => {
+                let mut new_value = OptValue::of_type(types.uint);
+                if *value < (1 << 28) {
+                    new_value.contains_valid_unsigned = true;
+                }
+                stack.push(new_value);
+            }
             Op::DecrementI => {
                 // TODO (same for other I ops): analyze what _exactly_ the type int implies
                 // and whether we can use Number or (u)int here
@@ -376,8 +444,14 @@ pub fn optimize<'gc>(
             Op::DecLocalI { index } => {
                 local_types.set_any(*index as usize);
             }
+            Op::DecLocal { index } => {
+                local_types.set(*index as usize, OptValue::of_type(types.number));
+            }
             Op::IncLocalI { index } => {
                 local_types.set_any(*index as usize);
+            }
+            Op::IncLocal { index } => {
+                local_types.set(*index as usize, OptValue::of_type(types.number));
             }
             Op::Increment => {
                 stack.pop();
@@ -407,7 +481,6 @@ pub fn optimize<'gc>(
                 stack.push_any();
             }
             Op::NegateI => {
-                stack.pop();
                 stack.pop();
                 stack.push_any();
             }
@@ -483,6 +556,9 @@ pub fn optimize<'gc>(
             Op::PushDouble { .. } => {
                 stack.push_class_object(types.number);
             }
+            Op::PushNamespace { .. } => {
+                stack.push_class_object(types.namespace);
+            }
             Op::PushString { .. } => {
                 stack.push_class_object(types.string);
             }
@@ -515,12 +591,38 @@ pub fn optimize<'gc>(
                 stack.pop();
                 stack.push_class_object(types.boolean);
             }
+            Op::InstanceOf => {
+                stack.pop();
+                stack.pop();
+                stack.push_class_object(types.boolean);
+            }
             Op::TypeOf => {
                 stack.pop();
                 stack.push_class_object(types.string);
             }
             Op::ApplyType { num_types } => {
                 stack.popn(*num_types);
+
+                stack.pop();
+
+                stack.push_any();
+            }
+            Op::CheckFilter => {
+                stack.pop();
+                stack.push_any();
+            }
+            Op::Dxns { .. } => {
+                // Dxns doesn't change stack or locals
+            }
+            Op::DxnsLate => {
+                stack.pop();
+            }
+            Op::EscXAttr | Op::EscXElem => {
+                stack.pop();
+                stack.push_class_object(types.string);
+            }
+            Op::GetDescendants { multiname } => {
+                stack.pop_for_multiname(*multiname);
 
                 stack.pop();
 
@@ -599,6 +701,10 @@ pub fn optimize<'gc>(
                 // Avoid handling for now
                 stack.push_any();
             }
+            Op::GetOuterScope { .. } => {
+                // Avoid handling for now
+                stack.push_any();
+            }
             Op::Pop => {
                 stack.pop();
             }
@@ -654,6 +760,11 @@ pub fn optimize<'gc>(
                 stack.push_any();
             }
             Op::NextValue => {
+                stack.pop();
+                stack.pop();
+                stack.push_any();
+            }
+            Op::HasNext => {
                 stack.pop();
                 stack.pop();
                 stack.push_any();
@@ -714,6 +825,7 @@ pub fn optimize<'gc>(
                                     *op = Op::CallMethod {
                                         num_args: 0,
                                         index: disp_id,
+                                        push_return_value: true,
                                     };
                                 }
                                 _ => {}
@@ -728,7 +840,8 @@ pub fn optimize<'gc>(
                 }
             }
             Op::InitProperty { multiname } => {
-                stack.pop();
+                let set_value = stack.pop_or_any();
+
                 stack.pop_for_multiname(*multiname);
                 let stack_value = stack.pop_or_any();
                 if !multiname.has_lazy_component() {
@@ -738,6 +851,37 @@ pub fn optimize<'gc>(
                                 Some(Property::Slot { slot_id })
                                 | Some(Property::ConstSlot { slot_id }) => {
                                     *op = Op::SetSlot { index: slot_id };
+
+                                    // If the set value's type is the same as the type of the slot,
+                                    // a SetSlotNoCoerce can be emitted.
+                                    let mut value_class =
+                                        class.instance_vtable().slot_classes()[slot_id as usize];
+                                    let resolved_value_class = value_class.get_class(activation);
+
+                                    if let Ok(slot_class) = resolved_value_class {
+                                        if let Some(slot_class) = slot_class {
+                                            if let Some(set_value_class) = set_value.class {
+                                                if GcCell::ptr_eq(
+                                                    set_value_class.inner_class_definition(),
+                                                    slot_class,
+                                                ) {
+                                                    *op = Op::SetSlotNoCoerce { index: slot_id };
+                                                }
+                                            }
+                                        } else {
+                                            // Slot type was Any, no coercion will be done anyways
+                                            *op = Op::SetSlotNoCoerce { index: slot_id };
+                                        }
+                                    }
+                                }
+                                Some(Property::Virtual {
+                                    set: Some(disp_id), ..
+                                }) => {
+                                    *op = Op::CallMethod {
+                                        num_args: 1,
+                                        index: disp_id,
+                                        push_return_value: false,
+                                    };
                                 }
                                 _ => {}
                             }
@@ -747,7 +891,8 @@ pub fn optimize<'gc>(
                 // `stack_pop_multiname` handled lazy
             }
             Op::SetProperty { multiname } => {
-                stack.pop();
+                let set_value = stack.pop_or_any();
+
                 stack.pop_for_multiname(*multiname);
                 let stack_value = stack.pop_or_any();
                 if !multiname.has_lazy_component() {
@@ -756,6 +901,37 @@ pub fn optimize<'gc>(
                             match class.instance_vtable().get_trait(multiname) {
                                 Some(Property::Slot { slot_id }) => {
                                     *op = Op::SetSlot { index: slot_id };
+
+                                    // If the set value's type is the same as the type of the slot,
+                                    // a SetSlotNoCoerce can be emitted.
+                                    let mut value_class =
+                                        class.instance_vtable().slot_classes()[slot_id as usize];
+                                    let resolved_value_class = value_class.get_class(activation);
+
+                                    if let Ok(slot_class) = resolved_value_class {
+                                        if let Some(slot_class) = slot_class {
+                                            if let Some(set_value_class) = set_value.class {
+                                                if GcCell::ptr_eq(
+                                                    set_value_class.inner_class_definition(),
+                                                    slot_class,
+                                                ) {
+                                                    *op = Op::SetSlotNoCoerce { index: slot_id };
+                                                }
+                                            }
+                                        } else {
+                                            // Slot type was Any, no coercion will be done anyways
+                                            *op = Op::SetSlotNoCoerce { index: slot_id };
+                                        }
+                                    }
+                                }
+                                Some(Property::Virtual {
+                                    set: Some(disp_id), ..
+                                }) => {
+                                    *op = Op::CallMethod {
+                                        num_args: 1,
+                                        index: disp_id,
+                                        push_return_value: false,
+                                    };
                                 }
                                 _ => {}
                             }
@@ -800,6 +976,42 @@ pub fn optimize<'gc>(
                 // Avoid checking return value for now
                 stack.push_any();
             }
+            Op::Call { num_args } => {
+                // Arguments
+                stack.popn(*num_args);
+
+                stack.pop();
+
+                stack.pop();
+
+                // Avoid checking return value for now
+                stack.push_any();
+            }
+            Op::CallPropLex {
+                multiname,
+                num_args,
+            } => {
+                // Arguments
+                stack.popn(*num_args);
+
+                stack.pop_for_multiname(*multiname);
+
+                // Then receiver.
+                stack.pop();
+
+                // Avoid checking return value for now
+                stack.push_any();
+            }
+            Op::CallStatic { num_args, .. } => {
+                // Arguments
+                stack.popn(*num_args);
+
+                // Then receiver.
+                stack.pop();
+
+                // Avoid checking return value for now
+                stack.push_any();
+            }
             Op::CallProperty {
                 multiname,
                 num_args,
@@ -820,6 +1032,7 @@ pub fn optimize<'gc>(
                                     *op = Op::CallMethod {
                                         num_args: *num_args,
                                         index: disp_id,
+                                        push_return_value: true,
                                     };
                                 }
                                 _ => {}
@@ -832,33 +1045,103 @@ pub fn optimize<'gc>(
                 // Avoid checking return value for now
                 stack.push_any();
             }
-            Op::CallPropVoid { .. } => {
-                // Avoid handling for now
-                stack.clear();
-            }
-            Op::Call { num_args } => {
+            Op::CallPropVoid {
+                multiname,
+                num_args,
+            } => {
                 // Arguments
                 stack.popn(*num_args);
 
+                stack.pop_for_multiname(*multiname);
+
+                // Then receiver.
+                let stack_value = stack.pop_or_any();
+
+                if !multiname.has_lazy_component() {
+                    if let Some(class) = stack_value.class {
+                        if !class.inner_class_definition().read().is_interface() {
+                            match class.instance_vtable().get_trait(multiname) {
+                                Some(Property::Method { disp_id }) => {
+                                    *op = Op::CallMethod {
+                                        num_args: *num_args,
+                                        index: disp_id,
+                                        push_return_value: false,
+                                    };
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                // `stack_pop_multiname` handled lazy
+            }
+            Op::GetSuper { multiname } => {
+                stack.pop_for_multiname(*multiname);
+
+                // Receiver
+                stack.pop();
+            }
+            Op::SetSuper { multiname } => {
+                stack.pop();
+
+                stack.pop_for_multiname(*multiname);
+
+                // Receiver
+                stack.pop();
+            }
+            Op::CallSuper {
+                multiname,
+                num_args,
+            } => {
+                // Arguments
+                stack.popn(*num_args);
+
+                stack.pop_for_multiname(*multiname);
+
+                // Then receiver.
                 stack.pop();
 
                 // Avoid checking return value for now
                 stack.push_any();
             }
+            Op::CallSuperVoid {
+                multiname,
+                num_args,
+            } => {
+                // Arguments
+                stack.popn(*num_args);
+
+                stack.pop_for_multiname(*multiname);
+
+                // Then receiver.
+                stack.pop();
+            }
             Op::GetGlobalScope => {
                 // Avoid handling for now
                 stack.push_any();
+            }
+            Op::GetGlobalSlot { .. } => {
+                // Avoid handling for now
+                stack.push_any();
+            }
+            Op::SetGlobalSlot { .. } => {
+                // Avoid handling for now
+                stack.pop();
             }
             Op::NewActivation => {
                 // Avoid handling for now
                 stack.push_any();
             }
             Op::Nop => {}
-            Op::DebugFile { .. } => {}
-            Op::DebugLine { .. } => {}
-            Op::Debug { .. } => {}
+            Op::DebugFile { .. }
+            | Op::DebugLine { .. }
+            | Op::Debug { .. }
+            | Op::Bkpt
+            | Op::BkptLine { .. }
+            | Op::Timestamp => {}
             Op::IfTrue { .. } | Op::IfFalse { .. } => {
                 stack.pop();
+                state_map.insert(i as i32, local_types.clone());
             }
             Op::IfStrictEq { .. }
             | Op::IfStrictNe { .. }
@@ -874,6 +1157,7 @@ pub fn optimize<'gc>(
             | Op::IfNlt { .. } => {
                 stack.pop();
                 stack.pop();
+                state_map.insert(i as i32, local_types.clone());
             }
             Op::Si8 | Op::Si16 | Op::Si32 => {
                 stack.pop();
@@ -885,31 +1169,64 @@ pub fn optimize<'gc>(
                 value.contains_valid_integer = true;
                 stack.push(value);
             }
-            Op::Sxi8 | Op::Sxi16 => {
+            Op::Li32 => {
+                stack.pop();
+                stack.push_class_object(types.int);
+            }
+            Op::Sxi1 | Op::Sxi8 | Op::Sxi16 => {
                 stack.pop();
                 let mut value = OptValue::of_type(types.int);
                 value.contains_valid_integer = true;
                 stack.push(value);
             }
-            Op::Li32 => {
+            Op::Sf32 | Op::Sf64 => {
                 stack.pop();
-                stack.push_class_object(types.int);
+                stack.pop();
             }
-            Op::ReturnVoid
-            | Op::ReturnValue
-            | Op::Throw
-            | Op::Jump { .. }
-            | Op::LookupSwitch(_) => {
+            Op::Lf32 | Op::Lf64 => {
+                stack.pop();
+                stack.push_class_object(types.number);
+            }
+            Op::ReturnVoid | Op::Throw | Op::LookupSwitch(_) => {
                 // End of block
                 stack.clear();
                 scope_stack.clear();
                 local_types = initial_local_types.clone();
+                last_op_was_block_terminating = true;
             }
-            _ => {
+            Op::ReturnValue => {
+                let stack_value = stack.pop_or_any();
+
+                if let Some(return_type) = return_type {
+                    if let Some(stack_value_class) = stack_value.class {
+                        if GcCell::ptr_eq(stack_value_class.inner_class_definition(), return_type) {
+                            *op = Op::ReturnValueNoCoerce;
+                        }
+                    }
+                } else {
+                    // Return type was Any, no coercion will be done anyways
+                    *op = Op::ReturnValueNoCoerce;
+                }
+
+                // End of block
                 stack.clear();
                 scope_stack.clear();
                 local_types = initial_local_types.clone();
+                last_op_was_block_terminating = true;
             }
+            Op::Jump { .. } => {
+                state_map.insert(i as i32, local_types.clone());
+
+                // End of block
+                stack.clear();
+                scope_stack.clear();
+                local_types = initial_local_types.clone();
+                last_op_was_block_terminating = true;
+            }
+            other => unreachable!(
+                "Optimizer hit op {:?}, which cannot appear after the verifier step",
+                other
+            ),
         }
     }
 }

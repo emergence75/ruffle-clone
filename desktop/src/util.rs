@@ -143,6 +143,7 @@ pub fn winit_to_ruffle_key_code(event: &KeyEvent) -> KeyCode {
         Key::Named(NamedKey::Insert) => KeyCode::Insert,
         Key::Named(NamedKey::Delete) => KeyCode::Delete,
         Key::Named(NamedKey::Pause) => KeyCode::Pause,
+        Key::Named(NamedKey::NumLock) => KeyCode::NumLock,
         Key::Named(NamedKey::ScrollLock) => KeyCode::ScrollLock,
         Key::Named(NamedKey::F1) => KeyCode::F1,
         Key::Named(NamedKey::F2) => KeyCode::F2,
@@ -234,7 +235,7 @@ pub fn parse_url(path: &Path) -> Result<Url, Error> {
 
 fn actually_pick_file(dir: Option<PathBuf>) -> Option<PathBuf> {
     let mut dialog = FileDialog::new()
-        .add_filter("Flash Files", &["swf", "spl"])
+        .add_filter("Flash Files", &["swf", "spl", "ruf"])
         .add_filter("All Files", &["*"])
         .set_title("Load a Flash File");
 

@@ -225,6 +225,8 @@ pub struct DisplayObjectBase<'gc> {
     /// The display object we are currently masking.
     maskee: Option<DisplayObject<'gc>>,
 
+    meta_data: Option<Avm2Object<'gc>>,
+
     /// The blend mode used when rendering this display object.
     /// Values other than the default `BlendMode::Normal` implicitly cause cache-as-bitmap behavior.
     #[collect(require_static)]
@@ -282,6 +284,7 @@ impl<'gc> Default for DisplayObjectBase<'gc> {
             next_avm1_clip: None,
             masker: None,
             maskee: None,
+            meta_data: None,
             sound_transform: Default::default(),
             blend_mode: Default::default(),
             blend_shader: None,
@@ -768,6 +771,14 @@ impl<'gc> DisplayObjectBase<'gc> {
 
     fn set_maskee(&mut self, node: Option<DisplayObject<'gc>>) {
         self.maskee = node;
+    }
+
+    fn meta_data(&self) -> Option<Avm2Object<'gc>> {
+        self.meta_data
+    }
+
+    fn set_meta_data(&mut self, value: Avm2Object<'gc>) {
+        self.meta_data = Some(value);
     }
 }
 
@@ -1707,6 +1718,14 @@ pub trait TDisplayObject<'gc>:
         }
     }
 
+    fn meta_data(&self) -> Option<Avm2Object<'gc>> {
+        self.base().meta_data()
+    }
+
+    fn set_meta_data(&self, gc_context: &Mutation<'gc>, value: Avm2Object<'gc>) {
+        self.base_mut(gc_context).set_meta_data(value);
+    }
+
     /// The blend mode used when rendering this display object.
     /// Values other than the default `BlendMode::Normal` implicitly cause cache-as-bitmap behavior.
     fn blend_mode(&self) -> ExtendedBlendMode {
@@ -1895,8 +1914,14 @@ pub trait TDisplayObject<'gc>:
         false
     }
 
+    /// Whether this object may be highlighted when focused.
+    fn is_highlightable(&self, context: &mut UpdateContext<'_, 'gc>) -> bool {
+        self.as_interactive()
+            .is_some_and(|o| o.is_highlight_enabled(context))
+    }
+
     /// Whether this object is included in tab ordering.
-    fn is_tab_enabled(&self, _context: &mut UpdateContext<'_, 'gc>) -> bool {
+    fn is_tabbable(&self, _context: &mut UpdateContext<'_, 'gc>) -> bool {
         false
     }
 
@@ -2365,6 +2390,20 @@ pub trait TDisplayObject<'gc>:
         root
     }
 
+    /// `avm1_root`, but disregards _lockroot
+    fn avm1_root_no_lock(&self) -> DisplayObject<'gc> {
+        let mut root = (*self).into();
+        while let Some(parent) = root.avm1_parent() {
+            if !parent.movie().is_action_script_3() {
+                root = parent;
+            } else {
+                // We've traversed upwards into a loader AVM2 movie, so break.
+                break;
+            }
+        }
+        root
+    }
+
     /// Obtain the top-most Stage or LoaderDisplay object of the display tree hierarchy, for use in mixed AVM.
     fn avm1_stage(&self) -> DisplayObject<'gc> {
         let mut root = (*self).into();
@@ -2494,12 +2533,15 @@ pub trait TDisplayObject<'gc>:
     /// Retrieve a named property from the AVM1 object.
     ///
     /// This is required as some boolean properties in AVM1 can in fact hold any value.
-    fn get_avm1_boolean_property(
+    fn get_avm1_boolean_property<F>(
         self,
         context: &mut UpdateContext<'_, 'gc>,
         name: &'static str,
-        default: bool,
-    ) -> bool {
+        default: F,
+    ) -> bool
+    where
+        F: FnOnce(&mut UpdateContext<'_, 'gc>) -> bool,
+    {
         if let Avm1Value::Object(object) = self.object() {
             let mut activation = Activation::from_nothing(
                 context.reborrow(),
@@ -2508,11 +2550,11 @@ pub trait TDisplayObject<'gc>:
             );
             if let Ok(value) = object.get(name, &mut activation) {
                 match value {
-                    Avm1Value::Undefined => default,
+                    Avm1Value::Undefined => default(&mut activation.context),
                     _ => value.as_bool(activation.swf_version()),
                 }
             } else {
-                default
+                default(&mut activation.context)
             }
         } else {
             false

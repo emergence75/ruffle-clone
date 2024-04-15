@@ -1,53 +1,76 @@
 use crate::log::FilenamePattern;
-use crate::preferences::PreferencesAndDocument;
+use crate::preferences::storage::StorageBackend;
+use crate::preferences::SavedGlobalPreferences;
+use ruffle_frontend_utils::parse::DocumentHolder;
 use ruffle_render_wgpu::clap::{GraphicsBackend, PowerPreference};
 use toml_edit::value;
 use unic_langid::LanguageIdentifier;
 
-pub struct PreferencesWriter<'a>(&'a mut PreferencesAndDocument);
+pub struct PreferencesWriter<'a>(&'a mut DocumentHolder<SavedGlobalPreferences>);
 
 impl<'a> PreferencesWriter<'a> {
-    pub(super) fn new(preferences: &'a mut PreferencesAndDocument) -> Self {
+    pub(super) fn new(preferences: &'a mut DocumentHolder<SavedGlobalPreferences>) -> Self {
         Self(preferences)
     }
 
     pub fn set_graphics_backend(&mut self, backend: GraphicsBackend) {
-        self.0.toml_document["graphics_backend"] = value(backend.as_str());
-        self.0.values.graphics_backend = backend;
+        self.0.edit(|values, toml_document| {
+            toml_document["graphics_backend"] = value(backend.as_str());
+            values.graphics_backend = backend;
+        })
     }
 
     pub fn set_graphics_power_preference(&mut self, preference: PowerPreference) {
-        self.0.toml_document["graphics_power_preference"] = value(preference.as_str());
-        self.0.values.graphics_power_preference = preference;
+        self.0.edit(|values, toml_document| {
+            toml_document["graphics_power_preference"] = value(preference.as_str());
+            values.graphics_power_preference = preference;
+        })
     }
 
     pub fn set_language(&mut self, language: LanguageIdentifier) {
-        self.0.toml_document["language"] = value(language.to_string());
-        self.0.values.language = language;
+        self.0.edit(|values, toml_document| {
+            toml_document["language"] = value(language.to_string());
+            values.language = language;
+        })
     }
 
     pub fn set_output_device(&mut self, name: Option<String>) {
-        if let Some(name) = &name {
-            self.0.toml_document["output_device"] = value(name);
-        } else {
-            self.0.toml_document.remove("output_device");
-        }
-        self.0.values.output_device = name;
+        self.0.edit(|values, toml_document| {
+            if let Some(name) = &name {
+                toml_document["output_device"] = value(name);
+            } else {
+                toml_document.remove("output_device");
+            }
+            values.output_device = name;
+        })
     }
 
     pub fn set_mute(&mut self, mute: bool) {
-        self.0.toml_document["mute"] = value(mute);
-        self.0.values.mute = mute;
+        self.0.edit(|values, toml_document| {
+            toml_document["mute"] = value(mute);
+            values.mute = mute;
+        })
     }
 
     pub fn set_volume(&mut self, volume: f32) {
-        self.0.toml_document["volume"] = value(volume as f64);
-        self.0.values.volume = volume;
+        self.0.edit(|values, toml_document| {
+            toml_document["volume"] = value(volume as f64);
+            values.volume = volume;
+        })
     }
 
     pub fn set_log_filename_pattern(&mut self, pattern: FilenamePattern) {
-        self.0.toml_document["log"]["filename_pattern"] = value(pattern.as_str());
-        self.0.values.log.filename_pattern = pattern;
+        self.0.edit(|values, toml_document| {
+            toml_document["log"]["filename_pattern"] = value(pattern.as_str());
+            values.log.filename_pattern = pattern;
+        })
+    }
+
+    pub fn set_storage_backend(&mut self, backend: StorageBackend) {
+        self.0.edit(|values, toml_document| {
+            toml_document["storage"]["backend"] = value(backend.as_str());
+            values.storage.backend = backend;
+        })
     }
 }
 
@@ -57,29 +80,11 @@ mod tests {
     use crate::preferences::read::read_preferences;
     use fluent_templates::loader::langid;
 
-    fn parse(input: &str) -> PreferencesAndDocument {
-        let (result, document) = read_preferences(input);
-        PreferencesAndDocument {
-            toml_document: document,
-            values: result.result,
-        }
-    }
-
-    fn check_roundtrip(preferences: &mut PreferencesAndDocument) {
-        let read_result = read_preferences(&preferences.toml_document.to_string());
-        assert_eq!(
-            preferences.values, read_result.0.result,
-            "roundtrip failed: expected != actual"
-        );
-    }
-
-    fn test(original: &str, fun: impl FnOnce(&mut PreferencesWriter), expected: &str) {
-        let mut preferences = parse(original);
-        let mut writer = PreferencesWriter::new(&mut preferences);
-        fun(&mut writer);
-        check_roundtrip(&mut preferences);
-        assert_eq!(expected, preferences.toml_document.to_string());
-    }
+    ruffle_frontend_utils::define_serialization_test_helpers!(
+        read_preferences,
+        SavedGlobalPreferences,
+        PreferencesWriter
+    );
 
     #[test]
     fn set_graphics_backend() {
@@ -172,6 +177,25 @@ mod tests {
             "[log]\nfilename_pattern = \"with_timestamp\"\n",
             |writer| writer.set_log_filename_pattern(FilenamePattern::SingleFile),
             "[log]\nfilename_pattern = \"single_file\"\n",
+        );
+    }
+
+    #[test]
+    fn set_storage_backend() {
+        test(
+            "",
+            |writer| writer.set_storage_backend(StorageBackend::Disk),
+            "storage = { backend = \"disk\" }\n",
+        );
+        test(
+            "storage = { backend = \"disk\" }\n",
+            |writer| writer.set_storage_backend(StorageBackend::Memory),
+            "storage = { backend = \"memory\" }\n",
+        );
+        test(
+            "[storage]\nbackend = \"disk\"\n",
+            |writer| writer.set_storage_backend(StorageBackend::Memory),
+            "[storage]\nbackend = \"memory\"\n",
         );
     }
 }

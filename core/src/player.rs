@@ -33,7 +33,6 @@ use crate::events::GamepadButton;
 use crate::events::{ButtonKeyCode, ClipEvent, ClipEventResult, KeyCode, MouseButton, PlayerEvent};
 use crate::external::{ExternalInterface, ExternalInterfaceProvider, NullFsCommandProvider};
 use crate::external::{FsCommandProvider, Value as ExternalValue};
-use crate::focus_tracker::FocusTracker;
 use crate::frame_lifecycle::{run_all_phases_avm2, FramePhase};
 use crate::library::Library;
 use crate::limits::ExecutionLimit;
@@ -158,9 +157,6 @@ struct GcRootData<'gc> {
 
     /// External interface for (for example) JavaScript <-> ActionScript interaction
     external_interface: ExternalInterface<'gc>,
-
-    /// A tracker for the current keyboard focused element
-    focus_tracker: FocusTracker<'gc>,
 
     /// Manager of active sound instances.
     audio_manager: AudioManager<'gc>,
@@ -1102,11 +1098,7 @@ impl Player {
 
             // Fire clip event on all clips.
             if let Some(clip_event) = clip_event {
-                for level in context.stage.iter_render_list() {
-                    if let Some(interactive) = level.as_interactive() {
-                        interactive.handle_clip_event(context, clip_event);
-                    }
-                }
+                context.stage.handle_clip_event(context, clip_event);
             }
 
             // Fire event listener on appropriate object
@@ -1189,6 +1181,17 @@ impl Player {
                 let reversed = context.input.is_key_down(KeyCode::Shift);
                 let tracker = context.focus_tracker;
                 tracker.cycle(context, reversed);
+            });
+        }
+
+        if matches!(
+            event,
+            PlayerEvent::MouseDown { .. }
+                | PlayerEvent::MouseUp { .. }
+                | PlayerEvent::MouseMove { .. }
+        ) {
+            self.mutate_with_update_context(|context| {
+                context.focus_tracker.reset_highlight();
             });
         }
     }
@@ -1853,7 +1856,6 @@ impl Player {
             let mut root_data = gc_root.data.write(gc_context);
             let mouse_hovered_object = root_data.mouse_hovered_object;
             let mouse_pressed_object = root_data.mouse_pressed_object;
-            let focus_tracker = root_data.focus_tracker;
 
             #[allow(unused_variables)]
             let (
@@ -1918,7 +1920,7 @@ impl Player {
                 start_time: self.start_time,
                 update_start: Instant::now(),
                 max_execution_duration: self.max_execution_duration,
-                focus_tracker,
+                focus_tracker: stage.focus_tracker(),
                 times_get_time_called: 0,
                 time_offset: &mut self.time_offset,
                 audio_manager,
@@ -2270,8 +2272,8 @@ impl PlayerBuilder {
 
     /// Sets the storage backend of the player.
     #[inline]
-    pub fn with_storage(mut self, storage: impl 'static + StorageBackend) -> Self {
-        self.storage = Some(Box::new(storage));
+    pub fn with_storage(mut self, storage: Box<dyn StorageBackend>) -> Self {
+        self.storage = Some(storage);
         self
     }
 
@@ -2462,7 +2464,6 @@ impl PlayerBuilder {
                         external_interface_providers,
                         fs_command_provider,
                     ),
-                    focus_tracker: FocusTracker::new(gc_context),
                     library: Library::empty(),
                     load_manager: LoadManager::new(),
                     mouse_hovered_object: None,

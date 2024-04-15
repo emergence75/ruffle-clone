@@ -10,13 +10,10 @@ mod app;
 mod backends;
 mod cli;
 mod custom_event;
-mod executor;
 mod gui;
 mod log;
 mod player;
 mod preferences;
-mod task;
-mod time_demo;
 mod util;
 
 use crate::preferences::GlobalPreferences;
@@ -182,11 +179,7 @@ fn main() -> Result<(), Error> {
 
     subscriber.init();
 
-    let result = if opt.timedemo {
-        time_demo::run_timedemo(preferences.cli)
-    } else {
-        App::new(preferences).and_then(|app| app.run())
-    };
+    let result = App::new(preferences).and_then(|app| app.run());
 
     #[cfg(windows)]
     if let Err(error) = &result {

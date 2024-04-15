@@ -1,16 +1,19 @@
 mod read;
 mod write;
 
+pub mod storage;
+
 use crate::cli::Opt;
 use crate::log::FilenamePattern;
 use crate::preferences::read::read_preferences;
 use crate::preferences::write::PreferencesWriter;
 use anyhow::{Context, Error};
 use ruffle_core::backend::ui::US_ENGLISH;
+use ruffle_frontend_utils::bookmarks::{read_bookmarks, Bookmarks, BookmarksWriter};
+use ruffle_frontend_utils::parse::DocumentHolder;
 use ruffle_render_wgpu::clap::{GraphicsBackend, PowerPreference};
 use std::sync::{Arc, Mutex};
 use sys_locale::get_locale;
-use toml_edit::DocumentMut;
 use unic_langid::LanguageIdentifier;
 
 /// The preferences that relate to the application itself.
@@ -33,7 +36,9 @@ pub struct GlobalPreferences {
     pub cli: Opt,
 
     /// The actual, mutable user preferences that are persisted to disk.
-    preferences: Arc<Mutex<PreferencesAndDocument>>,
+    preferences: Arc<Mutex<DocumentHolder<SavedGlobalPreferences>>>,
+
+    bookmarks: Arc<Mutex<DocumentHolder<Bookmarks>>>,
 }
 
 impl GlobalPreferences {
@@ -43,15 +48,25 @@ impl GlobalPreferences {
         let preferences = if preferences_path.exists() {
             let contents = std::fs::read_to_string(&preferences_path)
                 .context("Failed to read saved preferences")?;
-            let (result, document) = read_preferences(&contents);
+            let result = read_preferences(&contents);
             for warning in result.warnings {
                 // TODO: A way to display warnings to users, generally
                 tracing::warn!("{warning}");
             }
-            PreferencesAndDocument {
-                toml_document: document,
-                values: result.result,
+            result.result
+        } else {
+            Default::default()
+        };
+
+        let bookmarks_path = cli.config.join("bookmarks.toml");
+        let bookmarks = if bookmarks_path.exists() {
+            let contents = std::fs::read_to_string(&bookmarks_path)
+                .context("Failed to read saved bookmarks")?;
+            let result = read_bookmarks(&contents);
+            for warning in result.warnings {
+                tracing::warn!("{warning}");
             }
+            result.result
         } else {
             Default::default()
         };
@@ -59,6 +74,7 @@ impl GlobalPreferences {
         Ok(Self {
             cli,
             preferences: Arc::new(Mutex::new(preferences)),
+            bookmarks: Arc::new(Mutex::new(bookmarks)),
         })
     }
 
@@ -67,7 +83,6 @@ impl GlobalPreferences {
             self.preferences
                 .lock()
                 .expect("Preferences is not reentrant")
-                .values
                 .graphics_backend
         })
     }
@@ -77,7 +92,6 @@ impl GlobalPreferences {
             self.preferences
                 .lock()
                 .expect("Preferences is not reentrant")
-                .values
                 .graphics_power_preference
         })
     }
@@ -86,7 +100,6 @@ impl GlobalPreferences {
         self.preferences
             .lock()
             .expect("Preferences is not reentrant")
-            .values
             .language
             .clone()
     }
@@ -95,7 +108,6 @@ impl GlobalPreferences {
         self.preferences
             .lock()
             .expect("Preferences is not reentrant")
-            .values
             .output_device
             .clone()
     }
@@ -104,7 +116,6 @@ impl GlobalPreferences {
         self.preferences
             .lock()
             .expect("Preferences is not reentrant")
-            .values
             .mute
     }
 
@@ -113,7 +124,6 @@ impl GlobalPreferences {
             self.preferences
                 .lock()
                 .expect("Preferences is not reentrant")
-                .values
                 .volume
         })
     }
@@ -122,9 +132,28 @@ impl GlobalPreferences {
         self.preferences
             .lock()
             .expect("Preferences is not reentrant")
-            .values
             .log
             .filename_pattern
+    }
+
+    pub fn bookmarks(&self, fun: impl FnOnce(&Bookmarks)) {
+        fun(&self.bookmarks.lock().expect("Bookmarks is not reentrant"))
+    }
+
+    pub fn have_bookmarks(&self) -> bool {
+        let bookmarks = &self.bookmarks.lock().expect("Bookmarks is not reentrant");
+
+        !bookmarks.is_empty() && !bookmarks.iter().all(|x| x.is_invalid())
+    }
+
+    pub fn storage_backend(&self) -> storage::StorageBackend {
+        self.cli.storage.unwrap_or_else(|| {
+            self.preferences
+                .lock()
+                .expect("Preferences is not reentrant")
+                .storage
+                .backend
+        })
     }
 
     pub fn write_preferences(&self, fun: impl FnOnce(&mut PreferencesWriter)) -> Result<(), Error> {
@@ -136,28 +165,21 @@ impl GlobalPreferences {
         let mut writer = PreferencesWriter::new(&mut preferences);
         fun(&mut writer);
 
-        let serialized = preferences.toml_document.to_string();
+        let serialized = preferences.serialize();
         std::fs::write(self.cli.config.join("preferences.toml"), serialized)
             .context("Could not write preferences to disk")
     }
-}
 
-/// The actual preferences that are persisted to disk, and mutable at runtime.
-/// Care should be taken to only modify what's actually changed, using `GlobalPreferences::write_preferences`.
-///
-/// Two versions of Ruffle may have different preferences, or different values available for each preference.
-/// For this reason, we store both the original toml document *and* the parsed values as we understand them.
-/// Whenever we persist values back to the toml, we only edit the values we changed and leave the remaining
-/// values as they originally were.
-/// This way, switching between different versions will *not* wipe your settings or get Ruffle into an
-/// invalid state.
-#[derive(Default)]
-struct PreferencesAndDocument {
-    /// The original toml document
-    toml_document: DocumentMut,
+    pub fn write_bookmarks(&self, fun: impl FnOnce(&mut BookmarksWriter)) -> Result<(), Error> {
+        let mut bookmarks = self.bookmarks.lock().expect("Bookmarks is not reentrant");
 
-    /// The actual preferences stored within the toml document, as this version of Ruffle understands them.
-    values: SavedGlobalPreferences,
+        let mut writer = BookmarksWriter::new(&mut bookmarks);
+        fun(&mut writer);
+
+        let serialized = bookmarks.serialize();
+        std::fs::write(self.cli.config.join("bookmarks.toml"), serialized)
+            .context("Could not write bookmarks to disk")
+    }
 }
 
 #[derive(PartialEq, Debug)]
@@ -169,6 +191,7 @@ pub struct SavedGlobalPreferences {
     pub mute: bool,
     pub volume: f32,
     pub log: LogPreferences,
+    pub storage: StoragePreferences,
 }
 
 impl Default for SavedGlobalPreferences {
@@ -185,6 +208,7 @@ impl Default for SavedGlobalPreferences {
             mute: false,
             volume: 1.0,
             log: Default::default(),
+            storage: Default::default(),
         }
     }
 }
@@ -192,4 +216,9 @@ impl Default for SavedGlobalPreferences {
 #[derive(PartialEq, Debug, Default)]
 pub struct LogPreferences {
     pub filename_pattern: FilenamePattern,
+}
+
+#[derive(PartialEq, Debug, Default)]
+pub struct StoragePreferences {
+    pub backend: storage::StorageBackend,
 }
