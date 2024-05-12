@@ -10,7 +10,7 @@ use crate::avm2::script::TranslationUnit;
 use crate::avm2::{Activation, Error, QName};
 use crate::string::AvmAtom;
 
-use gc_arena::{Collect, Gc, GcCell};
+use gc_arena::{Collect, Gc};
 use std::collections::{HashMap, HashSet};
 use swf::avm2::read::Reader;
 use swf::avm2::types::{
@@ -26,7 +26,7 @@ pub struct VerifiedMethodInfo<'gc> {
     pub exceptions: Vec<Exception<'gc>>,
 
     pub param_config: Vec<ResolvedParamConfig<'gc>>,
-    pub return_type: Option<GcCell<'gc, Class<'gc>>>,
+    pub return_type: Option<Class<'gc>>,
 }
 
 #[derive(Collect)]
@@ -37,7 +37,7 @@ pub struct Exception<'gc> {
     pub target_offset: u32,
 
     pub variable_name: Option<QName<'gc>>,
-    pub target_class: Option<GcCell<'gc, Class<'gc>>>,
+    pub target_class: Option<Class<'gc>>,
 }
 
 #[derive(Clone, Debug)]
@@ -330,7 +330,7 @@ pub fn verify_method<'gc>(
 
                     activation
                         .domain()
-                        .get_class(&multiname, activation.context.gc_context)
+                        .get_class(&mut activation.context, &multiname)
                         .ok_or_else(|| {
                             make_error_1014(
                                 activation,
@@ -448,7 +448,7 @@ pub fn verify_method<'gc>(
 
             let resolved_type = activation
                 .domain()
-                .get_class(&pooled_type_name, activation.context.gc_context)
+                .get_class(&mut activation.context, &pooled_type_name)
                 .ok_or_else(|| {
                     make_error_1014(
                         activation,
@@ -506,7 +506,7 @@ pub fn verify_method<'gc>(
         let mut byte_offset = idx_to_byte_offset
             .get(i as usize)
             .copied()
-            .ok_or(make_error_1021(activation))?; // This is still reachable with some weird bytecode, see the `verify_jump_to_middle_of_op` test
+            .ok_or_else(|| make_error_1021(activation))?; // This is still reachable with some weird bytecode, see the `verify_jump_to_middle_of_op` test
 
         if is_jump {
             byte_offset += JUMP_INSTRUCTION_LENGTH;
@@ -516,7 +516,7 @@ pub fn verify_method<'gc>(
         let new_idx = byte_offset_to_idx
             .get(&(new_byte_offset as usize))
             .copied()
-            .ok_or(make_error_1021(activation))?; // See above comment
+            .ok_or_else(|| make_error_1021(activation))?; // See above comment
 
         Ok((new_idx, new_idx - i - 1))
     };
@@ -610,7 +610,7 @@ pub fn resolve_param_config<'gc>(
         } else {
             let lookedup_class = activation
                 .domain()
-                .get_class(&param.param_type_name, activation.context.gc_context)
+                .get_class(&mut activation.context, &param.param_type_name)
                 .ok_or_else(|| {
                     make_error_1014(
                         activation,
@@ -636,7 +636,7 @@ pub fn resolve_param_config<'gc>(
 fn resolve_return_type<'gc>(
     activation: &mut Activation<'_, 'gc>,
     return_type: &Multiname<'gc>,
-) -> Result<Option<GcCell<'gc, Class<'gc>>>, Error<'gc>> {
+) -> Result<Option<Class<'gc>>, Error<'gc>> {
     if return_type.has_lazy_component() {
         return Err(make_error_1014(activation, "[]".into()));
     }
@@ -648,7 +648,7 @@ fn resolve_return_type<'gc>(
     Ok(Some(
         activation
             .domain()
-            .get_class(return_type, activation.context.gc_context)
+            .get_class(&mut activation.context, return_type)
             .ok_or_else(|| {
                 make_error_1014(
                     activation,
@@ -1028,7 +1028,7 @@ fn resolve_op<'gc>(
 
             let class = activation
                 .domain()
-                .get_class(&multiname, activation.context.gc_context)
+                .get_class(&mut activation.context, &multiname)
                 .unwrap();
             // Verifier guarantees that class exists
 
@@ -1041,7 +1041,7 @@ fn resolve_op<'gc>(
 
             let class = activation
                 .domain()
-                .get_class(&multiname, activation.context.gc_context)
+                .get_class(&mut activation.context, &multiname)
                 .unwrap();
             // Verifier guarantees that class exists
 
@@ -1088,7 +1088,7 @@ fn resolve_op<'gc>(
 
             let class = activation
                 .domain()
-                .get_class(&multiname, activation.context.gc_context)
+                .get_class(&mut activation.context, &multiname)
                 .unwrap();
             // Verifier guarantees that class exists
 

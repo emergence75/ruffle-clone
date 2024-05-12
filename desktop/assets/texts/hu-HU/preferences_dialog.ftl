@@ -14,3 +14,5 @@ log-filename-pattern-with-timestamp = Időbélyeggel
 storage-backend = Mentésfájlok helye
 storage-backend-disk = Lemez
 storage-backend-memory = Memória
+recent-limit = Legutóbbiak korlátja
+recent-clear = Törlés

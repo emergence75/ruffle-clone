@@ -1,4 +1,7 @@
-use crate::backends::executor::FutureSpawner;
+mod fetch;
+
+use crate::backends::executor::{spawn_tokio, FutureSpawner};
+use crate::backends::navigator::fetch::{Response, ResponseBody};
 use crate::content::PlayingContent;
 use async_channel::{Receiver, Sender, TryRecvError};
 use async_io::Timer;
@@ -6,11 +9,7 @@ use async_net::TcpStream;
 use futures::future::select;
 use futures::{AsyncReadExt, AsyncWriteExt};
 use futures_lite::FutureExt;
-use isahc::http::{HeaderName, HeaderValue};
-use isahc::{
-    config::RedirectPolicy, prelude::*, AsyncBody, HttpClient, Request as IsahcRequest,
-    Response as IsahcResponse,
-};
+use reqwest::Proxy;
 use ruffle_core::backend::navigator::{
     async_return, create_fetch_error, ErrorResponse, NavigationMethod, NavigatorBackend,
     OpenURLMode, OwnedFuture, Request, SocketMode, SuccessResponse,
@@ -24,7 +23,6 @@ use std::io;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::rc::Rc;
-use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tracing::warn;
@@ -52,7 +50,7 @@ pub struct ExternalNavigatorBackend<F: FutureSpawner, I: NavigatorInterface> {
     base_url: Url,
 
     // Client to use for network requests
-    client: Option<Rc<HttpClient>>,
+    client: Option<Rc<reqwest::Client>>,
 
     socket_allowed: HashSet<String>,
 
@@ -81,11 +79,18 @@ impl<F: FutureSpawner, I: NavigatorInterface> ExternalNavigatorBackend<F, I> {
         content: Rc<PlayingContent>,
         interface: I,
     ) -> Self {
-        let proxy = proxy.and_then(|url| url.as_str().parse().ok());
-        let builder = HttpClient::builder()
-            .proxy(proxy)
-            .cookies()
-            .redirect_policy(RedirectPolicy::Follow);
+        let mut builder = reqwest::ClientBuilder::new().cookie_store(true);
+
+        if let Some(proxy) = proxy {
+            match Proxy::all(proxy.clone()) {
+                Ok(proxy) => {
+                    builder = builder.proxy(proxy);
+                }
+                Err(e) => {
+                    tracing::error!("Couldn't configure proxy {proxy}: {e}")
+                }
+            }
+        }
 
         let client = builder.build().ok().map(Rc::new);
 
@@ -133,7 +138,7 @@ impl<F: FutureSpawner, I: NavigatorInterface> NavigatorBackend for ExternalNavig
         };
 
         let modified_url = match vars_method {
-            Some((_, query_pairs)) => {
+            Some((_, query_pairs)) if !query_pairs.is_empty() => {
                 {
                     //lifetime limiter because we don't have NLL yet
                     let mut modifier = parsed_url.query_pairs_mut();
@@ -145,7 +150,7 @@ impl<F: FutureSpawner, I: NavigatorInterface> NavigatorBackend for ExternalNavig
 
                 parsed_url
             }
-            None => parsed_url,
+            _ => parsed_url,
         };
 
         if modified_url.scheme() == "javascript" {
@@ -178,130 +183,6 @@ impl<F: FutureSpawner, I: NavigatorInterface> NavigatorBackend for ExternalNavig
     }
 
     fn fetch(&self, request: Request) -> OwnedFuture<Box<dyn SuccessResponse>, ErrorResponse> {
-        enum DesktopResponseBody {
-            /// The response's body comes from a file.
-            File(Result<Vec<u8>, std::io::Error>),
-
-            /// The response's body comes from the network.
-            ///
-            /// This has to be stored in shared ownership so that we can return
-            /// owned futures. A synchronous lock is used here as we do not
-            /// expect contention on this lock.
-            Network(Arc<Mutex<IsahcResponse<AsyncBody>>>),
-        }
-
-        struct DesktopResponse {
-            url: String,
-            response_body: DesktopResponseBody,
-            status: u16,
-            redirected: bool,
-        }
-
-        impl SuccessResponse for DesktopResponse {
-            fn url(&self) -> std::borrow::Cow<str> {
-                std::borrow::Cow::Borrowed(&self.url)
-            }
-
-            #[allow(clippy::await_holding_lock)]
-            fn body(self: Box<Self>) -> OwnedFuture<Vec<u8>, Error> {
-                match self.response_body {
-                    DesktopResponseBody::File(file) => {
-                        Box::pin(async move { file.map_err(|e| Error::FetchError(e.to_string())) })
-                    }
-                    DesktopResponseBody::Network(response) => Box::pin(async move {
-                        let mut body = vec![];
-                        response
-                            .lock()
-                            .expect("working lock during fetch body read")
-                            .copy_to(&mut body)
-                            .await
-                            .map_err(|e| Error::FetchError(e.to_string()))?;
-
-                        Ok(body)
-                    }),
-                }
-            }
-
-            fn status(&self) -> u16 {
-                self.status
-            }
-
-            fn redirected(&self) -> bool {
-                self.redirected
-            }
-
-            #[allow(clippy::await_holding_lock)]
-            fn next_chunk(&mut self) -> OwnedFuture<Option<Vec<u8>>, Error> {
-                match &mut self.response_body {
-                    DesktopResponseBody::File(file) => {
-                        let res = file
-                            .as_mut()
-                            .map(std::mem::take)
-                            .map_err(|e| Error::FetchError(e.to_string()));
-
-                        Box::pin(async move {
-                            match res {
-                                Ok(bytes) if !bytes.is_empty() => Ok(Some(bytes)),
-                                Ok(_) => Ok(None),
-                                Err(e) => Err(e),
-                            }
-                        })
-                    }
-                    DesktopResponseBody::Network(response) => {
-                        let response = response.clone();
-
-                        Box::pin(async move {
-                            let mut buf = vec![0; 4096];
-                            let lock = response.try_lock();
-                            if matches!(lock, Err(std::sync::TryLockError::WouldBlock)) {
-                                return Err(Error::FetchError(
-                                    "Concurrent read operations on the same stream are not supported."
-                                        .to_string(),
-                                ));
-                            }
-
-                            let result = lock
-                                .expect("desktop network lock")
-                                .body_mut()
-                                .read(&mut buf)
-                                .await;
-
-                            match result {
-                                Ok(count) if count > 0 => {
-                                    buf.resize(count, 0);
-                                    Ok(Some(buf))
-                                }
-                                Ok(_) => Ok(None),
-                                Err(e) => Err(Error::FetchError(e.to_string())),
-                            }
-                        })
-                    }
-                }
-            }
-
-            fn expected_length(&self) -> Result<Option<u64>, Error> {
-                match &self.response_body {
-                    DesktopResponseBody::File(file) => {
-                        Ok(file.as_ref().map(|file| file.len() as u64).ok())
-                    }
-                    DesktopResponseBody::Network(response) => {
-                        let response = response.lock().expect("no recursive locks");
-                        let content_length = response.headers().get("Content-Length");
-
-                        if let Some(len) = content_length {
-                            Ok(Some(
-                                len.to_str()
-                                    .map_err(|_| Error::InvalidHeaderValue)?
-                                    .parse::<u64>()?,
-                            ))
-                        } else {
-                            Ok(None)
-                        }
-                    }
-                }
-            }
-        }
-
         // TODO: honor sandbox type (local-with-filesystem, local-with-network, remote, ...)
         let mut processed_url = match self.resolve_url(request.url()) {
             Ok(url) => url,
@@ -328,9 +209,9 @@ impl<F: FutureSpawner, I: NavigatorInterface> NavigatorBackend for ExternalNavig
                     let contents =
                         content.get_local_file(&processed_url, |path| interface.open_file(path));
 
-                    let response: Box<dyn SuccessResponse> = Box::new(DesktopResponse {
+                    let response: Box<dyn SuccessResponse> = Box::new(Response {
                         url: response_url.to_string(),
-                        response_body: DesktopResponseBody::File(contents),
+                        response_body: ResponseBody::File(contents),
                         status: 0,
                         redirected: false,
                     });
@@ -344,44 +225,23 @@ impl<F: FutureSpawner, I: NavigatorInterface> NavigatorBackend for ExternalNavig
                     error: Error::FetchError("Network unavailable".to_string()),
                 })?;
 
-                let mut isahc_request = match request.method() {
-                    NavigationMethod::Get => IsahcRequest::get(processed_url.to_string()),
-                    NavigationMethod::Post => IsahcRequest::post(processed_url.to_string()),
+                let mut request_builder = match request.method() {
+                    NavigationMethod::Get => client.get(processed_url.clone()),
+                    NavigationMethod::Post => client.post(processed_url.clone()),
                 };
                 let (body_data, mime) = request.body().clone().unwrap_or_default();
-                if let Some(headers) = isahc_request.headers_mut() {
-                    for (name, val) in request.headers().iter() {
-                        headers.insert(
-                            HeaderName::from_str(name).map_err(|e| ErrorResponse {
-                                url: processed_url.to_string(),
-                                error: Error::FetchError(e.to_string()),
-                            })?,
-                            HeaderValue::from_str(val).map_err(|e| ErrorResponse {
-                                url: processed_url.to_string(),
-                                error: Error::FetchError(e.to_string()),
-                            })?,
-                        );
-                    }
-                    headers.insert(
-                        "Content-Type",
-                        HeaderValue::from_str(&mime).map_err(|e| ErrorResponse {
-                            url: processed_url.to_string(),
-                            error: Error::FetchError(e.to_string()),
-                        })?,
-                    );
+                for (name, val) in request.headers().iter() {
+                    request_builder = request_builder.header(name, val);
                 }
+                request_builder = request_builder.header("Content-Type", &mime);
 
-                let body = isahc_request.body(body_data).map_err(|e| ErrorResponse {
-                    url: processed_url.to_string(),
-                    error: Error::FetchError(e.to_string()),
-                })?;
+                request_builder = request_builder.body(body_data);
 
-                let response = client.send_async(body).await.map_err(|e| {
-                    let inner = match e.kind() {
-                        isahc::error::ErrorKind::NameResolution => {
-                            Error::InvalidDomain(processed_url.to_string())
-                        }
-                        _ => Error::FetchError(e.to_string()),
+                let response = spawn_tokio(request_builder.send()).await.map_err(|e| {
+                    let inner = if e.is_connect() {
+                        Error::InvalidDomain(processed_url.to_string())
+                    } else {
+                        Error::FetchError(e.to_string())
                     };
                     ErrorResponse {
                         url: processed_url.to_string(),
@@ -389,27 +249,23 @@ impl<F: FutureSpawner, I: NavigatorInterface> NavigatorBackend for ExternalNavig
                     }
                 })?;
 
-                let url = if let Some(uri) = response.effective_uri() {
-                    uri.to_string()
-                } else {
-                    processed_url.into()
-                };
+                let url = response.url().to_string();
 
                 let status = response.status().as_u16();
-                let redirected = response.effective_uri().is_some();
+                let redirected = *response.url() != processed_url;
                 if !response.status().is_success() {
                     let error = Error::HttpNotOk(
                         format!("HTTP status is not ok, got {}", response.status()),
                         status,
                         redirected,
-                        response.body().len().unwrap_or(0),
+                        response.content_length().unwrap_or_default(),
                     );
                     return Err(ErrorResponse { url, error });
                 }
 
-                let response: Box<dyn SuccessResponse> = Box::new(DesktopResponse {
+                let response: Box<dyn SuccessResponse> = Box::new(Response {
                     url,
-                    response_body: DesktopResponseBody::Network(Arc::new(Mutex::new(response))),
+                    response_body: ResponseBody::Network(Arc::new(Mutex::new(Some(response)))),
                     status,
                     redirected,
                 });
@@ -607,6 +463,7 @@ mod tests {
     use async_net::TcpListener;
     use ruffle_core::socket::SocketAction::{Close, Connect, Data};
     use std::net::SocketAddr;
+    use std::str::FromStr;
     use tokio::task;
 
     use super::*;
@@ -845,16 +702,14 @@ mod tests {
             Connect(dummy_handle!(), ConnectionState::Connected),
         );
 
-        write_server(&mut server_socket, "Hello ").await;
-        write_server(&mut server_socket, "World!").await;
+        write_server(&mut server_socket, "Hello World!").await;
 
         assert_next_socket_actions!(
             client_read;
             Data(dummy_handle!(), "Hello World!".as_bytes().to_vec()),
         );
 
-        write_client(&client_write, "Hello from").await;
-        write_client(&client_write, " client").await;
+        write_client(&client_write, "Hello from client").await;
 
         assert_eq!(read_server(&mut server_socket).await, "Hello from client");
 
@@ -879,8 +734,7 @@ mod tests {
             Connect(dummy_handle!(), ConnectionState::Connected),
         );
 
-        write_client(&client_write, "Sending some").await;
-        write_client(&client_write, " data").await;
+        write_client(&client_write, "Sending some data").await;
         client_write.close();
 
         assert_eq!(read_server(&mut server_socket).await, "Sending some data");

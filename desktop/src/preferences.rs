@@ -11,6 +11,7 @@ use anyhow::{Context, Error};
 use ruffle_core::backend::ui::US_ENGLISH;
 use ruffle_frontend_utils::bookmarks::{read_bookmarks, Bookmarks, BookmarksWriter};
 use ruffle_frontend_utils::parse::DocumentHolder;
+use ruffle_frontend_utils::recents::{read_recents, Recents, RecentsWriter};
 use ruffle_render_wgpu::clap::{GraphicsBackend, PowerPreference};
 use std::sync::{Arc, Mutex};
 use sys_locale::get_locale;
@@ -39,6 +40,8 @@ pub struct GlobalPreferences {
     preferences: Arc<Mutex<DocumentHolder<SavedGlobalPreferences>>>,
 
     bookmarks: Arc<Mutex<DocumentHolder<Bookmarks>>>,
+
+    recents: Arc<Mutex<DocumentHolder<Recents>>>,
 }
 
 impl GlobalPreferences {
@@ -71,10 +74,24 @@ impl GlobalPreferences {
             Default::default()
         };
 
+        let recents_path = cli.config.join("recents.toml");
+        let recents = if recents_path.exists() {
+            let contents =
+                std::fs::read_to_string(&recents_path).context("Failed to read saved recents")?;
+            let result = read_recents(&contents);
+            for warning in result.warnings {
+                tracing::warn!("{warning}");
+            }
+            result.result
+        } else {
+            Default::default()
+        };
+
         Ok(Self {
             cli,
             preferences: Arc::new(Mutex::new(preferences)),
             bookmarks: Arc::new(Mutex::new(bookmarks)),
+            recents: Arc::new(Mutex::new(recents)),
         })
     }
 
@@ -156,6 +173,17 @@ impl GlobalPreferences {
         })
     }
 
+    pub fn recent_limit(&self) -> usize {
+        self.preferences
+            .lock()
+            .expect("Preferences is not reentrant")
+            .recent_limit
+    }
+
+    pub fn recents<R>(&self, fun: impl FnOnce(&Recents) -> R) -> R {
+        fun(&self.recents.lock().expect("Recents is not reentrant"))
+    }
+
     pub fn write_preferences(&self, fun: impl FnOnce(&mut PreferencesWriter)) -> Result<(), Error> {
         let mut preferences = self
             .preferences
@@ -180,6 +208,17 @@ impl GlobalPreferences {
         std::fs::write(self.cli.config.join("bookmarks.toml"), serialized)
             .context("Could not write bookmarks to disk")
     }
+
+    pub fn write_recents(&self, fun: impl FnOnce(&mut RecentsWriter)) -> Result<(), Error> {
+        let mut recents = self.recents.lock().expect("Recents is not reentrant");
+
+        let mut writer = RecentsWriter::new(&mut recents);
+        fun(&mut writer);
+
+        let serialized = recents.serialize();
+        std::fs::write(self.cli.config.join("recents.toml"), serialized)
+            .context("Could not write recents to disk")
+    }
 }
 
 #[derive(PartialEq, Debug)]
@@ -190,6 +229,7 @@ pub struct SavedGlobalPreferences {
     pub output_device: Option<String>,
     pub mute: bool,
     pub volume: f32,
+    pub recent_limit: usize,
     pub log: LogPreferences,
     pub storage: StoragePreferences,
 }
@@ -207,6 +247,7 @@ impl Default for SavedGlobalPreferences {
             output_device: None,
             mute: false,
             volume: 1.0,
+            recent_limit: 10,
             log: Default::default(),
             storage: Default::default(),
         }

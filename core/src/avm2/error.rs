@@ -100,7 +100,6 @@ pub fn make_reference_error<'gc>(
     let class_name = object_class
         .map(|cls| {
             cls.inner_class_definition()
-                .read()
                 .name()
                 .to_qualified_name_err_message(activation.context.gc_context)
         })
@@ -421,6 +420,23 @@ pub fn make_error_2008<'gc>(activation: &mut Activation<'_, 'gc>, param_name: &s
             param_name
         ),
         2008,
+    );
+    match err {
+        Ok(err) => Error::AvmError(err),
+        Err(err) => err,
+    }
+}
+
+#[inline(never)]
+#[cold]
+pub fn make_error_2027<'gc>(activation: &mut Activation<'_, 'gc>, value: i32) -> Error<'gc> {
+    let err = range_error(
+        activation,
+        &format!(
+            "Error #2027: Parameter tabIndex must be a non-negative number; got {}.",
+            value
+        ),
+        2027,
     );
     match err {
         Ok(err) => Error::AvmError(err),

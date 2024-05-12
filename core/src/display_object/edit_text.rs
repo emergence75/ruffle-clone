@@ -180,11 +180,6 @@ pub struct EditTextData<'gc> {
     /// Restrict what characters the user may input.
     #[collect(require_static)]
     restrict: EditTextRestrict,
-
-    // TODO Consider moving this to InteractiveObject along with
-    //      MovieClip's and Button's tab indices after AVM2 analysis
-    // NOTE: `tabIndex` is u32 in TextField, compared to i32 in Button and MovieClip
-    tab_index: Option<u32>,
 }
 
 impl<'gc> EditTextData<'gc> {
@@ -367,7 +362,6 @@ impl<'gc> EditText<'gc> {
                 mouse_wheel_enabled: true,
                 is_tlf: false,
                 restrict: EditTextRestrict::allow_all(),
-                tab_index: None,
             },
         ));
 
@@ -993,7 +987,7 @@ impl<'gc> EditText<'gc> {
             ..Default::default()
         });
 
-        let visible_selection = if edit_text.flags.contains(EditTextFlag::HAS_FOCUS) {
+        let visible_selection = if self.has_focus() {
             edit_text.selection
         } else {
             None
@@ -2034,18 +2028,6 @@ impl<'gc> EditText<'gc> {
                     .contains(Position::from((position.x, position.y)))
         })
     }
-
-    /// Get the value of `tabIndex` used in AS.
-    ///
-    /// Do not confuse it with `tab_index`, which returns the value used for ordering.
-    pub fn tab_index_value(&self) -> Option<u32> {
-        self.0.read().tab_index
-    }
-
-    /// Set the value of `tabIndex` used in AS.
-    pub fn set_tab_index_value(&self, context: &mut UpdateContext<'_, 'gc>, value: Option<u32>) {
-        self.0.write(context.gc()).tab_index = value;
-    }
 }
 
 impl<'gc> TDisplayObject<'gc> for EditText<'gc> {
@@ -2130,21 +2112,6 @@ impl<'gc> TDisplayObject<'gc> for EditText<'gc> {
 
     fn set_object2(&self, context: &mut UpdateContext<'_, 'gc>, to: Avm2Object<'gc>) {
         self.0.write(context.gc_context).object = Some(to.into());
-    }
-
-    fn set_parent(&self, context: &mut UpdateContext<'_, 'gc>, parent: Option<DisplayObject<'gc>>) {
-        let had_parent = self.parent().is_some();
-        self.base_mut(context.gc_context)
-            .set_parent_ignoring_orphan_list(parent);
-        let has_parent = self.parent().is_some();
-
-        if self.movie().is_action_script_3() && had_parent && !has_parent {
-            let had_focus = self.0.read().flags.contains(EditTextFlag::HAS_FOCUS);
-            if had_focus {
-                let tracker = context.focus_tracker;
-                tracker.set(None, context);
-            }
-        }
     }
 
     fn self_bounds(&self) -> Rectangle<Twips> {
@@ -2255,7 +2222,7 @@ impl<'gc> TDisplayObject<'gc> for EditText<'gc> {
         });
 
         if edit_text.layout.is_empty() && !edit_text.flags.contains(EditTextFlag::READ_ONLY) {
-            let visible_selection = if edit_text.flags.contains(EditTextFlag::HAS_FOCUS) {
+            let visible_selection = if self.has_focus() {
                 edit_text.selection
             } else {
                 None
@@ -2293,11 +2260,7 @@ impl<'gc> TDisplayObject<'gc> for EditText<'gc> {
     }
 
     fn avm1_unload(&self, context: &mut UpdateContext<'_, 'gc>) {
-        let had_focus = self.0.read().flags.contains(EditTextFlag::HAS_FOCUS);
-        if had_focus {
-            let tracker = context.focus_tracker;
-            tracker.set(None, context);
-        }
+        self.drop_focus(context);
 
         if let Some(node) = self.maskee() {
             node.set_masker(context.gc_context, None, true);
@@ -2323,45 +2286,6 @@ impl<'gc> TDisplayObject<'gc> for EditText<'gc> {
         }
 
         self.set_avm1_removed(context.gc_context, true);
-    }
-
-    fn on_focus_changed(
-        &self,
-        context: &mut UpdateContext<'_, 'gc>,
-        focused: bool,
-        other: Option<DisplayObject<'gc>>,
-    ) {
-        let is_action_script_3 = self.movie().is_action_script_3();
-        let mut text = self.0.write(context.gc_context);
-        text.flags.set(EditTextFlag::HAS_FOCUS, focused);
-        if !focused && !is_action_script_3 {
-            text.selection = None;
-        }
-        drop(text);
-
-        self.call_focus_handler(context, focused, other);
-    }
-
-    fn is_focusable(&self, _context: &mut UpdateContext<'_, 'gc>) -> bool {
-        // Even if this isn't selectable or editable, a script can focus on it manually.
-        true
-    }
-
-    fn is_highlightable(&self, _context: &mut UpdateContext<'_, 'gc>) -> bool {
-        // TextField is incapable of rendering a highlight.
-        false
-    }
-
-    fn is_tabbable(&self, context: &mut UpdateContext<'_, 'gc>) -> bool {
-        if !self.is_editable() {
-            // Non-editable text fields are never tabbable.
-            return false;
-        }
-        self.get_avm1_boolean_property(context, "tabEnabled", |_| true)
-    }
-
-    fn tab_index(&self) -> Option<i64> {
-        self.0.read().tab_index.map(|i| i as i64)
     }
 }
 
@@ -2509,6 +2433,39 @@ impl<'gc> TInteractiveObject<'gc> for EditText<'gc> {
             MouseCursor::Arrow
         }
     }
+
+    fn on_focus_changed(
+        &self,
+        context: &mut UpdateContext<'_, 'gc>,
+        focused: bool,
+        _other: Option<InteractiveObject<'gc>>,
+    ) {
+        let is_avm1 = !self.movie().is_action_script_3();
+        if !focused && is_avm1 {
+            self.0.write(context.gc_context).selection = None;
+        }
+    }
+
+    fn is_highlightable(&self, _context: &mut UpdateContext<'_, 'gc>) -> bool {
+        // TextField is incapable of rendering a highlight.
+        false
+    }
+
+    fn is_tabbable(&self, context: &mut UpdateContext<'_, 'gc>) -> bool {
+        if !self.is_editable() {
+            // Non-editable text fields are never tabbable.
+            return false;
+        }
+        self.tab_enabled(context)
+    }
+
+    fn tab_enabled_avm1(&self, context: &mut UpdateContext<'_, 'gc>) -> bool {
+        self.get_avm1_boolean_property(context, "tabEnabled", |_| true)
+    }
+
+    fn tab_enabled_avm2_default(&self, _context: &mut UpdateContext<'_, 'gc>) -> bool {
+        self.is_editable()
+    }
 }
 
 bitflags::bitflags! {
@@ -2516,7 +2473,6 @@ bitflags::bitflags! {
     struct EditTextFlag: u16 {
         const FIRING_VARIABLE_BINDING = 1 << 0;
         const HAS_BACKGROUND = 1 << 1;
-        const HAS_FOCUS = 1 << 2;
 
         // The following bits need to match `swf::EditTextFlag`.
         const READ_ONLY = 1 << 3;

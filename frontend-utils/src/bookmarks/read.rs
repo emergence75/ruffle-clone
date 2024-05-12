@@ -1,5 +1,5 @@
-use crate::bookmarks::{Bookmark, Bookmarks, INVALID_URL};
-use crate::parse::{DocumentHolder, ParseContext, ParseDetails, ReadExt};
+use crate::bookmarks::{Bookmark, Bookmarks};
+use crate::parse::{DocumentHolder, ParseContext, ParseDetails, ParseWarning, ReadExt};
 use toml_edit::DocumentMut;
 use url::Url;
 
@@ -9,7 +9,7 @@ pub fn read_bookmarks(input: &str) -> ParseDetails<Bookmarks> {
         Err(e) => {
             return ParseDetails {
                 result: Default::default(),
-                warnings: vec![format!("Invalid TOML: {e}")],
+                warnings: vec![ParseWarning::InvalidToml(e)],
             }
         }
     };
@@ -21,7 +21,7 @@ pub fn read_bookmarks(input: &str) -> ParseDetails<Bookmarks> {
         for bookmark in bookmarks.iter() {
             let url = match bookmark.parse_from_str(cx, "url") {
                 Some(value) => value,
-                None => Url::parse(INVALID_URL).expect("Url is constant and valid"),
+                None => Url::parse(crate::INVALID_URL).expect("Url is constant and valid"),
             };
 
             let name = match bookmark.parse_from_str(cx, "name") {
@@ -35,8 +35,8 @@ pub fn read_bookmarks(input: &str) -> ParseDetails<Bookmarks> {
     });
 
     ParseDetails {
-        result: DocumentHolder::new(result, document),
         warnings: cx.warnings,
+        result: DocumentHolder::new(result, document),
     }
 }
 
@@ -50,30 +50,37 @@ mod tests {
         let result = read_bookmarks("[bookmark]");
         assert_eq!(&Vec::<Bookmark>::new(), result.values());
         assert_eq!(
-            vec!["Invalid bookmark: expected array of tables but found table".to_string()],
+            vec![ParseWarning::UnexpectedType {
+                expected: "array of tables",
+                actual: "table",
+                path: "bookmark".to_string()
+            }],
             result.warnings
         );
 
         let result = read_bookmarks("[[bookmark]]");
         assert_eq!(
             &vec![Bookmark {
-                url: Url::parse(INVALID_URL).unwrap(),
+                url: Url::parse(crate::INVALID_URL).unwrap(),
                 name: "".to_string(),
             }],
             result.values()
         );
-        assert_eq!(Vec::<String>::new(), result.warnings);
+        assert_eq!(Vec::<ParseWarning>::new(), result.warnings);
 
         let result = read_bookmarks("[[bookmark]]\nurl = \"invalid\"");
         assert_eq!(
             &vec![Bookmark {
-                url: Url::parse(INVALID_URL).unwrap(),
+                url: Url::parse(crate::INVALID_URL).unwrap(),
                 name: "".to_string(),
             }],
             result.values()
         );
         assert_eq!(
-            vec!["Invalid bookmark.url: unsupported value \"invalid\"".to_string()],
+            vec![ParseWarning::UnsupportedValue {
+                value: "invalid".to_string(),
+                path: "bookmark.url".to_string()
+            }],
             result.warnings
         );
 
@@ -87,7 +94,7 @@ mod tests {
             }],
             result.values()
         );
-        assert_eq!(Vec::<String>::new(), result.warnings);
+        assert_eq!(Vec::<ParseWarning>::new(), result.warnings);
     }
 
     #[test]
@@ -114,7 +121,7 @@ mod tests {
             ],
             result.values()
         );
-        assert_eq!(Vec::<String>::new(), result.warnings);
+        assert_eq!(Vec::<ParseWarning>::new(), result.warnings);
 
         let result = read_bookmarks(
             r#"
@@ -137,11 +144,11 @@ mod tests {
                     name: "example.swf".to_string(),
                 },
                 Bookmark {
-                    url: Url::parse(INVALID_URL).unwrap(),
+                    url: Url::parse(crate::INVALID_URL).unwrap(),
                     name: "".to_string(),
                 },
                 Bookmark {
-                    url: Url::parse(INVALID_URL).unwrap(),
+                    url: Url::parse(crate::INVALID_URL).unwrap(),
                     name: "".to_string(),
                 },
                 Bookmark {
@@ -152,7 +159,10 @@ mod tests {
             result.values()
         );
         assert_eq!(
-            vec!["Invalid bookmark.url: unsupported value \"invalid\"".to_string()],
+            vec![ParseWarning::UnsupportedValue {
+                value: "invalid".to_string(),
+                path: "bookmark.url".to_string()
+            }],
             result.warnings
         );
     }

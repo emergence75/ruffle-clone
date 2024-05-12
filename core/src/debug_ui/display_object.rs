@@ -11,7 +11,9 @@ use crate::debug_ui::movie::open_movie_button;
 use crate::debug_ui::Message;
 use crate::display_object::{
     DisplayObject, EditText, MovieClip, Stage, TDisplayObject, TDisplayObjectContainer,
+    TInteractiveObject,
 };
+use crate::focus_tracker::Highlight;
 use egui::collapsing_header::CollapsingState;
 use egui::{Button, Checkbox, CollapsingHeader, ComboBox, Grid, Id, TextEdit, Ui, Widget, Window};
 use ruffle_wstr::{WStr, WString};
@@ -335,37 +337,90 @@ impl DisplayObjectWindow {
         object: Stage<'gc>,
         messages: &mut Vec<Message>,
     ) {
+        let focus_tracker = object.focus_tracker();
+        let focus = focus_tracker.get();
         Grid::new(ui.id().with("stage"))
             .num_columns(2)
             .show(ui, |ui| {
-                let focus = object.focus_tracker().get();
                 ui.label("Current Focus");
-                if let Some(focus) = focus {
-                    if ui.button(summary_name(focus)).clicked() {
-                        messages.push(Message::TrackDisplayObject(DisplayObjectHandle::new(
-                            context, focus,
-                        )));
+                if let Some(focus) = focus.map(|o| o.as_displayobject()) {
+                    open_display_object_button(
+                        ui,
+                        context,
+                        messages,
+                        focus,
+                        &mut self.hovered_debug_rect,
+                    );
+                    if ui.button("Clear").clicked() {
+                        focus_tracker.set(None, context);
+                    }
+                    if ui.button("Re-focus").clicked() {
+                        focus_tracker.set(None, context);
+                        focus_tracker.set(focus.as_interactive(), context);
                     }
                 } else {
                     ui.label("None");
                 }
                 ui.end_row();
 
-                let highlight = object.focus_tracker().is_highlight_active();
-                let highlight_enabled = focus.is_some_and(|o| o.is_highlightable(context));
+                let highlight = focus_tracker.highlight();
                 ui.label("Focus Highlight");
-                ui.add_enabled_ui(highlight_enabled, |ui| {
-                    let mut enabled = highlight;
-                    Checkbox::new(&mut enabled, "Enabled").ui(ui);
-                    if enabled != highlight {
-                        if enabled {
-                            object.focus_tracker().update_highlight(context);
-                        } else {
-                            object.focus_tracker().reset_highlight();
-                        }
-                    }
-                });
+                let highlight_text = match highlight {
+                    Highlight::Inactive => "inactive",
+                    Highlight::ActiveHidden => "active, hidden",
+                    Highlight::ActiveVisible => "active, visible",
+                };
+                ui.label(highlight_text);
                 ui.end_row();
+            });
+
+        let tab_order = focus_tracker.tab_order(context);
+        let tab_order_suffix = tab_order
+            .first()
+            .map(|o| {
+                if o.tab_index().is_some() {
+                    "custom"
+                } else {
+                    "automatic"
+                }
+            })
+            .unwrap_or("empty");
+        CollapsingHeader::new(format!("Tab Order ({})", tab_order_suffix))
+            .id_source(ui.id().with("tab_order"))
+            .show(ui, |ui| {
+                Grid::new(ui.id().with("tab_order_grid"))
+                    .num_columns(3)
+                    .show(ui, |ui| {
+                        ui.label("#");
+                        ui.label("Object");
+                        ui.label("Actions");
+                        ui.label("Tab Index");
+                        ui.end_row();
+
+                        for (i, object) in tab_order.iter().enumerate() {
+                            if Some(*object) == focus {
+                                ui.label(format!("{}.*", i + 1));
+                            } else {
+                                ui.label(format!("{}.", i + 1));
+                            }
+                            open_display_object_button(
+                                ui,
+                                context,
+                                messages,
+                                object.as_displayobject(),
+                                &mut self.hovered_debug_rect,
+                            );
+                            if ui.button("Focus").clicked() {
+                                focus_tracker.set(Some(*object), context);
+                            }
+                            if let Some(tab_index) = object.tab_index() {
+                                ui.label(tab_index.to_string());
+                            } else {
+                                ui.label("(none)");
+                            }
+                            ui.end_row();
+                        }
+                    });
             });
     }
 
@@ -501,6 +556,41 @@ impl DisplayObjectWindow {
                 ui.label("Color Transform");
                 ui.label(summary_color_transform(color_transform));
                 ui.end_row();
+
+                if let Some(obj) = object.as_interactive() {
+                    ui.label("Mouse enabled");
+                    ui.horizontal(|ui| {
+                        let mut enabled = obj.mouse_enabled();
+                        Checkbox::new(&mut enabled, "Enabled").ui(ui);
+                        if enabled != obj.mouse_enabled() {
+                            obj.set_mouse_enabled(context.gc_context, enabled);
+                        }
+                    });
+                    ui.end_row();
+
+                    ui.label("Double-click enabled");
+                    ui.horizontal(|ui| {
+                        let mut enabled = obj.double_click_enabled();
+                        Checkbox::new(&mut enabled, "Enabled").ui(ui);
+                        if enabled != obj.double_click_enabled() {
+                            obj.set_double_click_enabled(context.gc_context, enabled);
+                        }
+                    });
+                    ui.end_row();
+                }
+
+                if let Some(obj) = object.as_container() {
+                    ui.label("Mouse children enabled");
+                    ui.horizontal(|ui| {
+                        let mut enabled = obj.raw_container().mouse_children();
+                        Checkbox::new(&mut enabled, "Enabled").ui(ui);
+                        if enabled != obj.raw_container().mouse_children() {
+                            obj.raw_container_mut(context.gc_context)
+                                .set_mouse_children(enabled);
+                        }
+                    });
+                    ui.end_row();
+                }
             });
 
         let filters = object.filters();

@@ -46,8 +46,8 @@ impl BundleInformation {
             .unwrap_or(Err(BundleInformationParseError::InvalidBundleSection))?;
 
         Ok(ParseDetails {
-            result: DocumentHolder::new(result, document),
             warnings: cx.warnings,
+            result: DocumentHolder::new(result, document),
         })
     }
 }
@@ -55,9 +55,12 @@ impl BundleInformation {
 #[cfg(test)]
 mod test {
     use crate::bundle::info::{BundleInformation, BundleInformationParseError};
+    use crate::parse::ParseWarning;
     use url::Url;
 
-    fn read(input: &str) -> Result<(BundleInformation, Vec<String>), BundleInformationParseError> {
+    fn read(
+        input: &str,
+    ) -> Result<(BundleInformation, Vec<ParseWarning>), BundleInformationParseError> {
         BundleInformation::parse(input).map(|details| (details.result.take(), details.warnings))
     }
 

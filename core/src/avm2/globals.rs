@@ -2,7 +2,7 @@ use crate::avm2::activation::Activation;
 use crate::avm2::api_version::ApiVersion;
 use crate::avm2::class::Class;
 use crate::avm2::domain::Domain;
-use crate::avm2::object::{ClassObject, Object, ScriptObject, TObject};
+use crate::avm2::object::{ClassObject, ScriptObject, TObject};
 use crate::avm2::scope::{Scope, ScopeChain};
 use crate::avm2::script::Script;
 use crate::avm2::Avm2;
@@ -11,7 +11,7 @@ use crate::avm2::Namespace;
 use crate::avm2::QName;
 use crate::string::AvmString;
 use crate::tag_utils::{self, ControlFlow, SwfMovie, SwfSlice, SwfStream};
-use gc_arena::{Collect, GcCell, Mutation};
+use gc_arena::{Collect, Mutation};
 use std::sync::Arc;
 use swf::TagCode;
 
@@ -357,7 +357,7 @@ fn dynamic_class<'gc>(
 ) {
     let (_, global, mut domain) = script.init();
     let class = class_object.inner_class_definition();
-    let name = class.read().name();
+    let name = class.name();
 
     global.install_const_late(mc, name, class_object.into(), class_class);
     domain.export_definition(name, script, mc)
@@ -368,39 +368,24 @@ fn dynamic_class<'gc>(
 /// This function returns the class object and class prototype as a class, which
 /// may be stored in `SystemClasses`
 fn class<'gc>(
-    class_def: GcCell<'gc, Class<'gc>>,
+    class_def: Class<'gc>,
     script: Script<'gc>,
     activation: &mut Activation<'_, 'gc>,
 ) -> Result<ClassObject<'gc>, Error<'gc>> {
     let mc = activation.context.gc_context;
     let (_, global, mut domain) = script.init();
 
-    let class_read = class_def.read();
-    let super_class = if let Some(sc_name) = class_read.super_class_name() {
-        let super_class: Result<Object<'gc>, Error<'gc>> = activation
-            .resolve_definition(sc_name)
-            .ok()
-            .and_then(|v| v)
-            .and_then(|v| v.as_object())
-            .ok_or_else(|| {
-                format!(
-                    "Could not resolve superclass {} when defining global class {}",
-                    sc_name.to_qualified_name(mc),
-                    class_read.name().to_qualified_name(mc)
-                )
-                .into()
-            });
-        let super_class = super_class?
-            .as_class_object()
-            .ok_or_else(|| Error::from("Base class of a global class is not a class"))?;
+    let super_class = if let Some(super_class) = class_def.super_class() {
+        let super_class = super_class
+            .class_object()
+            .ok_or_else(|| Error::from("Base class should have been initialized"))?;
 
         Some(super_class)
     } else {
         None
     };
 
-    let class_name = class_read.name();
-    drop(class_read);
+    let class_name = class_def.name();
 
     let class_object = ClassObject::from_class(activation, class_def, super_class)?;
     global.install_const_late(
@@ -434,9 +419,7 @@ fn vector_class<'gc>(
     let generic_vector = activation.avm2().classes().generic_vector;
     generic_vector.add_application(mc, param_class, vector_cls);
     let generic_cls = generic_vector.inner_class_definition();
-    generic_cls
-        .write(mc)
-        .add_application(cls, vector_cls.inner_class_definition());
+    generic_cls.add_application(mc, cls, vector_cls.inner_class_definition());
 
     let legacy_name = QName::new(activation.avm2().vector_internal_namespace, legacy_name);
     global.install_const_late(
@@ -496,24 +479,24 @@ pub fn load_player_globals<'gc>(
     let object_classdef = object::create_class(activation);
     let object_class = ClassObject::from_class_partial(activation, object_classdef, None)?;
     let object_proto = ScriptObject::custom_object(mc, Some(object_class), None);
-    domain.export_class(object_classdef.read().name(), object_classdef, mc);
+    domain.export_class(object_classdef.name(), object_classdef, mc);
 
-    let fn_classdef = function::create_class(activation);
+    let fn_classdef = function::create_class(activation, object_classdef);
     let fn_class = ClassObject::from_class_partial(activation, fn_classdef, Some(object_class))?;
     let fn_proto = ScriptObject::custom_object(mc, Some(fn_class), Some(object_proto));
-    domain.export_class(fn_classdef.read().name(), fn_classdef, mc);
+    domain.export_class(fn_classdef.name(), fn_classdef, mc);
 
-    let class_classdef = class::create_class(activation);
+    let class_classdef = class::create_class(activation, object_classdef);
     let class_class =
         ClassObject::from_class_partial(activation, class_classdef, Some(object_class))?;
     let class_proto = ScriptObject::custom_object(mc, Some(object_class), Some(object_proto));
-    domain.export_class(class_classdef.read().name(), class_classdef, mc);
+    domain.export_class(class_classdef.name(), class_classdef, mc);
 
-    let global_classdef = global_scope::create_class(activation);
+    let global_classdef = global_scope::create_class(activation, object_classdef);
     let global_class =
         ClassObject::from_class_partial(activation, global_classdef, Some(object_class))?;
     let global_proto = ScriptObject::custom_object(mc, Some(object_class), Some(object_proto));
-    domain.export_class(global_classdef.read().name(), global_classdef, mc);
+    domain.export_class(global_classdef.name(), global_classdef, mc);
 
     // Now to weave the Gordian knot...
     object_class.link_prototype(activation, object_proto)?;

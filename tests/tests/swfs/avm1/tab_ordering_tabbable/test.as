@@ -12,6 +12,8 @@ text3._visible = false;
 text6.selectable = false;
 clip9._visible = false;
 button11._visible = false;
+text12.type = "dynamic";
+text12.tabEnabled = true;
 
 var objects = [
     text1,
@@ -26,7 +28,8 @@ var objects = [
     clip9,
     clip9.text,
     button10,
-    button11
+    button11,
+    text12
 ];
 
 var tabbedObjects = [];
@@ -51,7 +54,7 @@ listener.onKeyDown = function() {
         if (testStage == 1) {
             trace("Enabling tab");
             for (var i in objects) {
-                objects[i].tabEnable = true;
+                objects[i].tabEnabled = true;
             }
         } else if (testStage == 2) {
             trace("Setting custom order");

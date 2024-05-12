@@ -24,7 +24,7 @@ use crate::avm2::{Avm2, Error};
 use crate::context::{GcContext, UpdateContext};
 use crate::string::{AvmAtom, AvmString};
 use crate::tag_utils::SwfMovie;
-use gc_arena::{Gc, GcCell};
+use gc_arena::Gc;
 use smallvec::SmallVec;
 use std::cmp::{min, Ordering};
 use std::sync::Arc;
@@ -324,15 +324,6 @@ impl<'a, 'gc> Activation<'a, 'gc> {
         } else {
             Ok(None)
         }
-    }
-
-    pub fn lookup_class_in_domain(
-        &mut self,
-        name: &Multiname<'gc>,
-    ) -> Result<GcCell<'gc, Class<'gc>>, Error<'gc>> {
-        self.domain()
-            .get_class(name, self.context.gc_context)
-            .ok_or_else(|| format!("Attempted to resolve nonexistent type {name:?}").into())
     }
 
     /// Resolve a single parameter value.
@@ -788,7 +779,7 @@ impl<'a, 'gc> Activation<'a, 'gc> {
         &mut self,
         method: Gc<'gc, BytecodeMethod<'gc>>,
         index: Index<AbcClass>,
-    ) -> Result<GcCell<'gc, Class<'gc>>, Error<'gc>> {
+    ) -> Result<Class<'gc>, Error<'gc>> {
         method.translation_unit().load_class(index.0, self)
     }
 
@@ -1384,6 +1375,8 @@ impl<'a, 'gc> Activation<'a, 'gc> {
         }
 
         // (fast) side path for dictionary/array-likes
+        // NOTE: FP behaves differently here when the public namespace isn't
+        // included in the multiname's namespace set
         if multiname.has_lazy_name() && !multiname.has_lazy_ns() {
             // `MultinameL` is the only form of multiname that allows fast-path
             // or alternate-path lookups based on the local name *value*,
@@ -1443,25 +1436,43 @@ impl<'a, 'gc> Activation<'a, 'gc> {
         }
 
         // side path for dictionary/arrays (TODO)
+        // NOTE: FP behaves differently here when the public namespace isn't
+        // included in the multiname's namespace set
         if multiname.has_lazy_name() && !multiname.has_lazy_ns() {
             // `MultinameL` is the only form of multiname that allows fast-path
             // or alternate-path lookups based on the local name *value*,
             // rather than it's string representation.
 
             let name_value = self.context.avm2.peek(0);
-            let object = self.context.avm2.peek(1);
-            if !name_value.is_primitive() {
-                let object = object.coerce_to_object_or_typeerror(self, None)?;
-                if let Some(dictionary) = object.as_dictionary_object() {
-                    let _ = self.pop_stack();
-                    let _ = self.pop_stack();
-                    dictionary.set_property_by_object(
-                        name_value.as_object().unwrap(),
-                        value,
-                        self.context.gc_context,
-                    );
+            let object_value = self.context.avm2.peek(1);
 
-                    return Ok(FrameControl::Continue);
+            if let Value::Object(object) = object_value {
+                match name_value {
+                    Value::Integer(name_int) if name_int >= 0 => {
+                        if let Some(mut array) =
+                            object.as_array_storage_mut(self.context.gc_context)
+                        {
+                            let _ = self.pop_stack();
+                            let _ = self.pop_stack();
+                            array.set(name_int as usize, value);
+
+                            return Ok(FrameControl::Continue);
+                        }
+                    }
+                    Value::Object(name_object) => {
+                        if let Some(dictionary) = object.as_dictionary_object() {
+                            let _ = self.pop_stack();
+                            let _ = self.pop_stack();
+                            dictionary.set_property_by_object(
+                                name_object,
+                                value,
+                                self.context.gc_context,
+                            );
+
+                            return Ok(FrameControl::Continue);
+                        }
+                    }
+                    _ => {}
                 }
             }
         }
@@ -1732,7 +1743,6 @@ impl<'a, 'gc> Activation<'a, 'gc> {
                 .instance_of()
                 .map(|cls| {
                     cls.inner_class_definition()
-                        .read()
                         .name()
                         .to_qualified_name_err_message(self.context.gc_context)
                 })
@@ -2044,7 +2054,6 @@ impl<'a, 'gc> Activation<'a, 'gc> {
         let value2 = self.pop_stack();
         let value1 = self.pop_stack();
 
-        // TODO: Special handling required for `Date` and ECMA-357/E4X `XML`
         let sum_value = match (value1, value2) {
             // note: with not-yet-guaranteed assumption that Integer < 1<<28, this won't overflow.
             (Value::Integer(n1), Value::Integer(n2)) => (n1 + n2).into(),
@@ -2630,10 +2639,7 @@ impl<'a, 'gc> Activation<'a, 'gc> {
         Ok(FrameControl::Continue)
     }
 
-    fn op_is_type(
-        &mut self,
-        class: GcCell<'gc, Class<'gc>>,
-    ) -> Result<FrameControl<'gc>, Error<'gc>> {
+    fn op_is_type(&mut self, class: Class<'gc>) -> Result<FrameControl<'gc>, Error<'gc>> {
         let value = self.pop_stack();
 
         let is_instance_of = value.is_of_type(self, class);
@@ -2662,10 +2668,7 @@ impl<'a, 'gc> Activation<'a, 'gc> {
         Ok(FrameControl::Continue)
     }
 
-    fn op_as_type(
-        &mut self,
-        class: GcCell<'gc, Class<'gc>>,
-    ) -> Result<FrameControl<'gc>, Error<'gc>> {
+    fn op_as_type(&mut self, class: Class<'gc>) -> Result<FrameControl<'gc>, Error<'gc>> {
         let value = self.pop_stack();
 
         if value.is_of_type(self, class) {
@@ -2831,10 +2834,7 @@ impl<'a, 'gc> Activation<'a, 'gc> {
     }
 
     /// Implements `Op::Coerce`
-    fn op_coerce(
-        &mut self,
-        class: GcCell<'gc, Class<'gc>>,
-    ) -> Result<FrameControl<'gc>, Error<'gc>> {
+    fn op_coerce(&mut self, class: Class<'gc>) -> Result<FrameControl<'gc>, Error<'gc>> {
         let val = self.pop_stack();
         let x = val.coerce_to_type(self, class)?;
 
@@ -2858,7 +2858,7 @@ impl<'a, 'gc> Activation<'a, 'gc> {
         let dm = self.domain_memory();
         let mut dm = dm
             .as_bytearray_mut(self.context.gc_context)
-            .ok_or_else(|| "Unable to get bytearray storage".to_string())?;
+            .expect("Bytearray storage should exist");
 
         let Ok(address) = usize::try_from(address) else {
             return Err(make_error_1506(self));
@@ -2868,8 +2868,7 @@ impl<'a, 'gc> Activation<'a, 'gc> {
             return Err(make_error_1506(self));
         }
 
-        dm.write_at_nongrowing(&val.to_le_bytes(), address)
-            .map_err(|e| e.to_avm(self))?;
+        dm.set_nongrowing(address, val as u8);
 
         Ok(FrameControl::Continue)
     }
@@ -2882,7 +2881,7 @@ impl<'a, 'gc> Activation<'a, 'gc> {
         let dm = self.domain_memory();
         let mut dm = dm
             .as_bytearray_mut(self.context.gc_context)
-            .ok_or_else(|| "Unable to get bytearray storage".to_string())?;
+            .expect("Bytearray storage should exist");
 
         let Ok(address) = usize::try_from(address) else {
             return Err(make_error_1506(self));
@@ -2904,7 +2903,7 @@ impl<'a, 'gc> Activation<'a, 'gc> {
         let dm = self.domain_memory();
         let mut dm = dm
             .as_bytearray_mut(self.context.gc_context)
-            .ok_or_else(|| "Unable to get bytearray storage".to_string())?;
+            .expect("Bytearray storage should exist");
 
         let Ok(address) = usize::try_from(address) else {
             return Err(make_error_1506(self));
@@ -2926,7 +2925,7 @@ impl<'a, 'gc> Activation<'a, 'gc> {
         let dm = self.domain_memory();
         let mut dm = dm
             .as_bytearray_mut(self.context.gc_context)
-            .ok_or_else(|| "Unable to get bytearray storage".to_string())?;
+            .expect("Bytearray storage should exist");
 
         let Ok(address) = usize::try_from(address) else {
             return Err(make_error_1506(self));
@@ -2948,7 +2947,7 @@ impl<'a, 'gc> Activation<'a, 'gc> {
         let dm = self.domain_memory();
         let mut dm = dm
             .as_bytearray_mut(self.context.gc_context)
-            .ok_or_else(|| "Unable to get bytearray storage".to_string())?;
+            .expect("Bytearray storage should exist");
 
         let Ok(address) = usize::try_from(address) else {
             return Err(make_error_1506(self));
@@ -2967,9 +2966,8 @@ impl<'a, 'gc> Activation<'a, 'gc> {
         let address = self.pop_stack().coerce_to_u32(self)? as usize;
 
         let dm = self.domain_memory();
-        let dm = dm
-            .as_bytearray()
-            .ok_or_else(|| "Unable to get bytearray storage".to_string())?;
+        let dm = dm.as_bytearray().expect("Bytearray storage should exist");
+
         let val = dm.get(address);
 
         if let Some(val) = val {
@@ -2986,9 +2984,7 @@ impl<'a, 'gc> Activation<'a, 'gc> {
         let address = self.pop_stack().coerce_to_u32(self)? as usize;
 
         let dm = self.domain_memory();
-        let dm = dm
-            .as_bytearray()
-            .ok_or_else(|| "Unable to get bytearray storage".to_string())?;
+        let dm = dm.as_bytearray().expect("Bytearray storage should exist");
 
         if address > dm.len() - 2 {
             return Err(make_error_1506(self));
@@ -3005,9 +3001,7 @@ impl<'a, 'gc> Activation<'a, 'gc> {
         let address = self.pop_stack().coerce_to_u32(self)? as usize;
 
         let dm = self.domain_memory();
-        let dm = dm
-            .as_bytearray()
-            .ok_or_else(|| "Unable to get bytearray storage".to_string())?;
+        let dm = dm.as_bytearray().expect("Bytearray storage should exist");
 
         if address > dm.len() - 4 {
             return Err(make_error_1506(self));
@@ -3023,9 +3017,7 @@ impl<'a, 'gc> Activation<'a, 'gc> {
         let address = self.pop_stack().coerce_to_u32(self)? as usize;
 
         let dm = self.domain_memory();
-        let dm = dm
-            .as_bytearray()
-            .ok_or_else(|| "Unable to get bytearray storage".to_string())?;
+        let dm = dm.as_bytearray().expect("Bytearray storage should exist");
 
         if address > dm.len() - 4 {
             return Err(make_error_1506(self));
@@ -3042,9 +3034,7 @@ impl<'a, 'gc> Activation<'a, 'gc> {
         let address = self.pop_stack().coerce_to_u32(self)? as usize;
 
         let dm = self.domain_memory();
-        let dm = dm
-            .as_bytearray()
-            .ok_or_else(|| "Unable to get bytearray storage".to_string())?;
+        let dm = dm.as_bytearray().expect("Bytearray storage should exist");
 
         if address > dm.len() - 8 {
             return Err(make_error_1506(self));

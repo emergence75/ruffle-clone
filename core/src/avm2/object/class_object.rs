@@ -12,10 +12,10 @@ use crate::avm2::property::Property;
 use crate::avm2::scope::{Scope, ScopeChain};
 use crate::avm2::value::Value;
 use crate::avm2::vtable::{ClassBoundMethod, VTable};
+use crate::avm2::Error;
 use crate::avm2::Multiname;
 use crate::avm2::QName;
 use crate::avm2::TranslationUnit;
-use crate::avm2::{Domain, Error};
 use crate::string::AvmString;
 use fnv::FnvHashMap;
 use gc_arena::{Collect, GcCell, GcWeakCell, Mutation};
@@ -40,7 +40,7 @@ pub struct ClassObjectData<'gc> {
     base: ScriptObjectData<'gc>,
 
     /// The class associated with this class object.
-    class: GcCell<'gc, Class<'gc>>,
+    class: Class<'gc>,
 
     /// The associated prototype.
     /// Should always be non-None after initialization.
@@ -94,7 +94,7 @@ pub struct ClassObjectData<'gc> {
     /// from parent classes and superinterfaces (recursively).
     /// TODO - avoid cloning this when a subclass implements the
     /// same interface as its superclass.
-    interfaces: Vec<GcCell<'gc, Class<'gc>>>,
+    interfaces: Vec<Class<'gc>>,
 
     /// VTable used for instances of this class.
     instance_vtable: VTable<'gc>,
@@ -138,7 +138,7 @@ impl<'gc> ClassObject<'gc> {
     /// to be limited to interfaces.
     pub fn from_class(
         activation: &mut Activation<'_, 'gc>,
-        class: GcCell<'gc, Class<'gc>>,
+        class: Class<'gc>,
         superclass_object: Option<ClassObject<'gc>>,
     ) -> Result<Self, Error<'gc>> {
         let class_object = Self::from_class_partial(activation, class, superclass_object)?;
@@ -172,30 +172,29 @@ impl<'gc> ClassObject<'gc> {
     /// allocated.
     pub fn from_class_partial(
         activation: &mut Activation<'_, 'gc>,
-        class: GcCell<'gc, Class<'gc>>,
+        class: Class<'gc>,
         superclass_object: Option<ClassObject<'gc>>,
     ) -> Result<Self, Error<'gc>> {
         let scope = activation.create_scopechain();
         if let Some(base_class) = superclass_object.map(|b| b.inner_class_definition()) {
-            if base_class.read().is_final() {
+            if base_class.is_final() {
                 return Err(format!(
                     "Base class {:?} is final and cannot be extended",
-                    base_class.read().name().local_name()
+                    base_class.name().local_name()
                 )
                 .into());
             }
 
-            if base_class.read().is_interface() {
+            if base_class.is_interface() {
                 return Err(format!(
                     "Base class {:?} is an interface and cannot be extended",
-                    base_class.read().name().local_name()
+                    base_class.name().local_name()
                 )
                 .into());
             }
         }
 
         let instance_allocator = class
-            .read()
             .instance_allocator()
             .or_else(|| superclass_object.and_then(|c| c.instance_allocator()))
             .unwrap_or(scriptobject_allocator);
@@ -210,9 +209,9 @@ impl<'gc> ClassObject<'gc> {
                 instance_scope: scope,
                 superclass_object,
                 instance_allocator: Allocator(instance_allocator),
-                constructor: class.read().instance_init(),
-                native_constructor: class.read().native_instance_init(),
-                call_handler: class.read().call_handler(),
+                constructor: class.instance_init(),
+                native_constructor: class.native_instance_init(),
+                call_handler: class.call_handler(),
                 params: None,
                 applications: Default::default(),
                 interfaces: Vec::new(),
@@ -232,9 +231,7 @@ impl<'gc> ClassObject<'gc> {
             .write(activation.context.gc_context)
             .instance_scope = instance_scope;
 
-        class
-            .write(activation.context.gc_context)
-            .add_class_object(class_object);
+        class.add_class_object(activation.context.gc_context, class_object);
 
         Ok(class_object)
     }
@@ -248,11 +245,11 @@ impl<'gc> ClassObject<'gc> {
             "Cannot finish initialization of core class without it being linked to a type!",
         )?;
 
-        class.read().validate_class(self.superclass_object())?;
+        class.validate_class(self.superclass_object())?;
 
         self.instance_vtable().init_vtable(
             self,
-            class.read().instance_traits(),
+            &class.instance_traits(),
             self.instance_scope(),
             self.superclass_object().map(|cls| cls.instance_vtable()),
             activation,
@@ -287,7 +284,7 @@ impl<'gc> ClassObject<'gc> {
         // class vtable == class traits + Class instance traits
         self.class_vtable().init_vtable(
             self,
-            class.read().class_traits(),
+            &class.class_traits(),
             self.class_scope(),
             Some(self.instance_of().unwrap().instance_vtable()),
             activation,
@@ -332,23 +329,24 @@ impl<'gc> ClassObject<'gc> {
         let class = write.class;
         let scope = write.class_scope;
 
-        let interface_names = class.read().direct_interfaces().to_vec();
+        let interface_names = class.direct_interfaces().to_vec();
         let mut interfaces = Vec::with_capacity(interface_names.len());
 
         let mut dedup = HashSet::new();
         let mut queue = vec![class];
         while let Some(cls) = queue.pop() {
-            for interface_name in cls.read().direct_interfaces() {
-                let interface = self.early_resolve_class(
-                    scope.domain(),
-                    interface_name,
-                    activation.context.gc_context,
-                )?;
+            for interface_name in &*cls.direct_interfaces() {
+                let interface = scope
+                    .domain()
+                    .get_class(&mut activation.context, interface_name)
+                    .ok_or_else(|| {
+                        Error::from(format!("Could not resolve interface {interface_name:?}"))
+                    })?;
 
-                if !interface.read().is_interface() {
+                if !interface.is_interface() {
                     return Err(format!(
                         "Class {:?} is not an interface and cannot be implemented by classes",
-                        interface.read().name().local_name()
+                        interface.name().local_name()
                     )
                     .into());
                 }
@@ -359,12 +357,8 @@ impl<'gc> ClassObject<'gc> {
                 }
             }
 
-            if let Some(superclass_name) = cls.read().super_class_name() {
-                queue.push(self.early_resolve_class(
-                    scope.domain(),
-                    superclass_name,
-                    activation.context.gc_context,
-                )?);
+            if let Some(super_class) = cls.super_class() {
+                queue.push(super_class);
             }
         }
         write.interfaces = interfaces;
@@ -377,8 +371,7 @@ impl<'gc> ClassObject<'gc> {
         // Otherwise, our behavior diverges from Flash Player in certain cases.
         // See the ignored test 'tests/tests/swfs/avm2/weird_superinterface_properties/'
         for interface in &read.interfaces {
-            let iface_read = interface.read();
-            for interface_trait in iface_read.instance_traits() {
+            for interface_trait in &*interface.instance_traits() {
                 if !interface_trait.name().namespace().is_public() {
                     let public_name = QName::new(
                         activation.context.avm2.public_namespace_vm_internal,
@@ -394,20 +387,6 @@ impl<'gc> ClassObject<'gc> {
         }
 
         Ok(())
-    }
-
-    // Looks up a class by name, without using `ScopeChain.resolve`
-    // This lets us look up an class before its `ClassObject` has been constructed,
-    // which is needed to resolve classes when constructing a (different) `ClassObject`.
-    fn early_resolve_class(
-        &self,
-        domain: Domain<'gc>,
-        class_name: &Multiname<'gc>,
-        mc: &Mutation<'gc>,
-    ) -> Result<GcCell<'gc, Class<'gc>>, Error<'gc>> {
-        domain
-            .get_class(class_name, mc)
-            .ok_or_else(|| format!("Could not resolve class {class_name:?}").into())
     }
 
     /// Manually set the type of this `Class`.
@@ -438,10 +417,9 @@ impl<'gc> ClassObject<'gc> {
 
         let scope = self.0.read().class_scope;
         let class = self.0.read().class;
-        let class_read = class.read();
 
-        if !class_read.is_class_initialized() {
-            let class_initializer = class_read.class_init();
+        if !class.is_class_initialized() {
+            let class_initializer = class.class_init();
             let class_init_fn = FunctionObject::from_method(
                 activation,
                 class_initializer,
@@ -450,10 +428,7 @@ impl<'gc> ClassObject<'gc> {
                 Some(self),
             );
 
-            drop(class_read);
-            class
-                .write(activation.context.gc_context)
-                .mark_class_initialized();
+            class.mark_class_initialized(activation.context.gc_context);
 
             class_init_fn.call(object.into(), &[], activation)?;
         }
@@ -467,11 +442,11 @@ impl<'gc> ClassObject<'gc> {
     /// interface we are checking against this class.
     ///
     /// To test if a class *instance* is of a given type, see is_of_type.
-    pub fn has_class_in_chain(self, test_class: GcCell<'gc, Class<'gc>>) -> bool {
+    pub fn has_class_in_chain(self, test_class: Class<'gc>) -> bool {
         let mut my_class = Some(self);
 
         while let Some(class) = my_class {
-            if GcCell::ptr_eq(class.inner_class_definition(), test_class) {
+            if class.inner_class_definition() == test_class {
                 return true;
             }
 
@@ -483,9 +458,9 @@ impl<'gc> ClassObject<'gc> {
         // Therefore, we only need to check interfaces once, and we can skip
         // checking them when we processing superclasses in the `while`
         // further down in this method.
-        if test_class.read().is_interface() {
+        if test_class.is_interface() {
             for interface in self.interfaces() {
-                if GcCell::ptr_eq(interface, test_class) {
+                if interface == test_class {
                     return true;
                 }
             }
@@ -562,7 +537,6 @@ impl<'gc> ClassObject<'gc> {
             let qualified_multiname_name = multiname.as_uri(activation.context.gc_context);
             let qualified_class_name = self
                 .inner_class_definition()
-                .read()
                 .name()
                 .to_qualified_name_err_message(activation.context.gc_context);
 
@@ -769,11 +743,11 @@ impl<'gc> ClassObject<'gc> {
     /// in contexts where panicking would be extremely undesirable,
     /// and there's a fallback if we cannot obtain the `Class`
     /// (such as `Debug` impls),
-    pub fn try_inner_class_definition(&self) -> Result<GcCell<'gc, Class<'gc>>, BorrowError> {
+    pub fn try_inner_class_definition(&self) -> Result<Class<'gc>, BorrowError> {
         self.0.try_read().map(|c| c.class)
     }
 
-    pub fn inner_class_definition(self) -> GcCell<'gc, Class<'gc>> {
+    pub fn inner_class_definition(self) -> Class<'gc> {
         self.0.read().class
     }
 
@@ -781,7 +755,7 @@ impl<'gc> ClassObject<'gc> {
         self.0.read().prototype.unwrap()
     }
 
-    pub fn interfaces(self) -> Vec<GcCell<'gc, Class<'gc>>> {
+    pub fn interfaces(self) -> Vec<Class<'gc>> {
         self.0.read().interfaces.clone()
     }
 
@@ -819,7 +793,7 @@ impl<'gc> ClassObject<'gc> {
     pub fn debug_class_name(&self) -> Box<dyn Debug + 'gc> {
         let class_name = self
             .try_inner_class_definition()
-            .and_then(|class| class.try_read().map(|c| c.name()));
+            .and_then(|class| class.try_name());
 
         match class_name {
             Ok(class_name) => Box::new(class_name),
@@ -844,7 +818,7 @@ impl<'gc> TObject<'gc> for ClassObject<'gc> {
     fn to_string(&self, activation: &mut Activation<'_, 'gc>) -> Result<Value<'gc>, Error<'gc>> {
         Ok(AvmString::new_utf8(
             activation.context.gc_context,
-            format!("[class {}]", self.0.read().class.read().name().local_name()),
+            format!("[class {}]", self.0.read().class.name().local_name()),
         )
         .into())
     }
@@ -930,14 +904,13 @@ impl<'gc> TObject<'gc> for ClassObject<'gc> {
     ) -> Result<ClassObject<'gc>, Error<'gc>> {
         let self_class = self.inner_class_definition();
 
-        if !self_class.read().is_generic() {
+        if !self_class.is_generic() {
             return Err(make_error_1127(activation));
         }
 
         if nullable_params.len() != 1 {
             let class_name = self
                 .inner_class_definition()
-                .read()
                 .name()
                 .to_qualified_name(activation.context.gc_context);
 
@@ -967,7 +940,7 @@ impl<'gc> TObject<'gc> for ClassObject<'gc> {
                         // Note: FP throws VerifyError #1107 here
                         format!(
                             "Cannot apply class {:?} with non-class parameter",
-                            self_class.read().name()
+                            self_class.name()
                         )
                     })?,
             ),
@@ -982,8 +955,8 @@ impl<'gc> TObject<'gc> for ClassObject<'gc> {
 
         let class_param = object_param.map(|c| c.inner_class_definition());
 
-        let parameterized_class: GcCell<'_, Class<'_>> =
-            Class::with_type_param(self_class, class_param, activation.context.gc_context);
+        let parameterized_class =
+            Class::with_type_param(&mut activation.context, self_class, class_param);
 
         // NOTE: this isn't fully accurate, but much simpler.
         // FP's Vector is more of special case that literally copies some parent class's properties
