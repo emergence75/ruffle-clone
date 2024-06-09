@@ -17,10 +17,12 @@ use ruffle_frontend_utils::bundle::source::BundleSourceError;
 use ruffle_frontend_utils::bundle::{Bundle, BundleError};
 use ruffle_frontend_utils::content::PlayingContent;
 use ruffle_frontend_utils::player_options::PlayerOptions;
+use ruffle_frontend_utils::recents::Recent;
 use ruffle_render::backend::RenderBackend;
 use ruffle_render::quality::StageQuality;
 use ruffle_render_wgpu::backend::WgpuRenderBackend;
 use ruffle_render_wgpu::descriptors::Descriptors;
+use std::borrow::Cow;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Debug;
 use std::path::PathBuf;
@@ -75,6 +77,8 @@ impl From<&GlobalPreferences> for LaunchOptions {
                 load_behavior: value.cli.load_behavior,
                 letterbox: value.cli.letterbox,
                 spoof_url: value.cli.spoof_url.clone(),
+                referer: value.cli.referer.clone(),
+                cookie: value.cli.cookie.clone(),
                 player_version: value.cli.player_version,
                 player_runtime: value.cli.player_runtime,
                 frame_rate: value.cli.frame_rate,
@@ -166,6 +170,39 @@ impl ActivePlayer {
             }
         }
 
+        let recent_limit = preferences.recent_limit();
+        if let Err(e) = preferences.write_recents(|writer| {
+            writer.push(
+                Recent {
+                    url: movie_url.clone(),
+                    name: content.name(),
+                },
+                recent_limit,
+            )
+        }) {
+            tracing::warn!("Couldn't update recents: {e}");
+        }
+
+        let opt = match &content {
+            PlayingContent::DirectFile(_) => Cow::Borrowed(opt),
+            PlayingContent::Bundle(_, bundle) => {
+                let player = opt.player.or(&bundle.information().player);
+
+                Cow::Owned(LaunchOptions {
+                    player,
+                    proxy: opt.proxy.clone(),
+                    socket_allowed: opt.socket_allowed.clone(),
+                    tcp_connections: opt.tcp_connections,
+                    fullscreen: opt.fullscreen,
+                    save_directory: opt.save_directory.clone(),
+                    open_url_mode: opt.open_url_mode,
+                    gamepad_button_mapping: opt.gamepad_button_mapping.clone(),
+                    avm2_optimizer_enabled: opt.avm2_optimizer_enabled,
+                    avm_output_json: opt.avm_output_json,
+                })
+            }
+        };
+
         let (executor, future_spawner) = AsyncExecutor::new(WinitWaker(event_loop.clone()));
         let movie_url = content.initial_swf_url().clone();
         let readable_name = content.name();
@@ -174,6 +211,8 @@ impl ActivePlayer {
                 .base
                 .to_owned()
                 .unwrap_or_else(|| movie_url.clone()),
+            opt.player.referer.clone(),
+            opt.player.cookie.clone(),
             future_spawner,
             opt.proxy.clone(),
             opt.player.upgrade_to_https.unwrap_or_default(),
@@ -184,9 +223,27 @@ impl ActivePlayer {
             RfdNavigatorInterface,
         );
 
-        if cfg!(feature = "software_video") {
-            builder =
-                builder.with_video(ruffle_video_software::backend::SoftwareVideoBackend::new());
+        if cfg!(feature = "external_video") && preferences.openh264_enabled() {
+            #[cfg(feature = "external_video")]
+            {
+                use ruffle_video_external::backend::ExternalVideoBackend;
+                let path = tokio::task::block_in_place(ExternalVideoBackend::get_openh264);
+                let openh264_path = match path {
+                    Ok(path) => Some(path),
+                    Err(e) => {
+                        tracing::error!("Couldn't get OpenH264: {}", e);
+                        None
+                    }
+                };
+
+                builder = builder.with_video(ExternalVideoBackend::new(openh264_path));
+            }
+        } else {
+            #[cfg(feature = "software_video")]
+            {
+                builder =
+                    builder.with_video(ruffle_video_software::backend::SoftwareVideoBackend::new());
+            }
         }
 
         let renderer = WgpuRenderBackend::new(descriptors, movie_view)
@@ -207,7 +264,7 @@ impl ActivePlayer {
         builder = builder
             .with_navigator(navigator)
             .with_renderer(renderer)
-            .with_storage(preferences.storage_backend().create_backend(opt))
+            .with_storage(preferences.storage_backend().create_backend(&opt))
             .with_fs_commands(Box::new(DesktopFSCommandProvider {
                 event_loop: event_loop.clone(),
                 window: window.clone(),

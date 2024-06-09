@@ -788,10 +788,10 @@ impl<'gc> EditText<'gc> {
                 .drawing
                 .draw_command(DrawCommand::LineTo(Point::new(width, Twips::ZERO)));
             write.drawing.draw_command(DrawCommand::LineTo(Point::ZERO));
-
-            drop(write);
-            self.invalidate_cached_bitmap(gc_context);
         }
+
+        drop(write);
+        self.invalidate_cached_bitmap(gc_context);
     }
 
     /// Internal padding between the bounds of the EditText and the text.
@@ -1256,11 +1256,17 @@ impl<'gc> EditText<'gc> {
 
     pub fn set_selection(self, selection: Option<TextSelection>, gc_context: &Mutation<'gc>) {
         let mut text = self.0.write(gc_context);
+        let old_selection = text.selection;
         if let Some(mut selection) = selection {
             selection.clamp(text.text_spans.text().len());
             text.selection = Some(selection);
         } else {
             text.selection = None;
+        }
+
+        if old_selection != text.selection {
+            drop(text);
+            self.invalidate_cached_bitmap(gc_context);
         }
     }
 
@@ -1304,7 +1310,8 @@ impl<'gc> EditText<'gc> {
             scroll as usize
         };
         let clamped = scroll_lines.clamp(1, self.maxscroll());
-        self.0.write(context.gc_context).scroll = clamped;
+        self.0.write(context.gc()).scroll = clamped;
+        self.invalidate_cached_bitmap(context.gc());
     }
 
     pub fn max_chars(self) -> i32 {
@@ -2308,7 +2315,9 @@ impl<'gc> TInteractiveObject<'gc> for EditText<'gc> {
         event: ClipEvent,
     ) -> ClipEventResult {
         match event {
-            ClipEvent::Press | ClipEvent::MouseWheel { .. } => ClipEventResult::Handled,
+            ClipEvent::Press | ClipEvent::MouseWheel { .. } | ClipEvent::MouseMove => {
+                ClipEventResult::Handled
+            }
             _ => ClipEventResult::NotHandled,
         }
     }
@@ -2333,43 +2342,60 @@ impl<'gc> TInteractiveObject<'gc> for EditText<'gc> {
             return ClipEventResult::Handled;
         }
 
-        if self.is_editable() || self.is_selectable() {
-            let tracker = context.focus_tracker;
-            tracker.set(Some(self.into()), context);
-        }
-
-        // We can't hold self as any link may end up modifying this object, so pull the info out
-        let mut link_to_open = None;
-
-        if let Some(position) = self.screen_position_to_index(*context.mouse_position) {
-            self.0.write(context.gc_context).selection =
-                Some(TextSelection::for_position(position));
-
-            if let Some((span_index, _)) =
-                self.0.read().text_spans.resolve_position_as_span(position)
-            {
-                link_to_open = self
-                    .0
-                    .read()
-                    .text_spans
-                    .span(span_index)
-                    .map(|s| (s.url.clone(), s.target.clone()));
+        if let ClipEvent::Press = event {
+            if self.is_editable() || self.is_selectable() {
+                let tracker = context.focus_tracker;
+                tracker.set(Some(self.into()), context);
             }
-        } else {
-            self.0.write(context.gc_context).selection =
-                Some(TextSelection::for_position(self.text_length()));
+
+            // We can't hold self as any link may end up modifying this object, so pull the info out
+            let mut link_to_open = None;
+
+            if let Some(position) = self.screen_position_to_index(*context.mouse_position) {
+                self.set_selection(Some(TextSelection::for_position(position)), context.gc());
+
+                if let Some((span_index, _)) =
+                    self.0.read().text_spans.resolve_position_as_span(position)
+                {
+                    link_to_open = self
+                        .0
+                        .read()
+                        .text_spans
+                        .span(span_index)
+                        .map(|s| (s.url.clone(), s.target.clone()));
+                }
+            } else {
+                self.set_selection(
+                    Some(TextSelection::for_position(self.text_length())),
+                    context.gc(),
+                );
+            }
+
+            if let Some((url, target)) = link_to_open {
+                if !url.is_empty() {
+                    // TODO: This fires on mouse DOWN but it should be mouse UP...
+                    // but only if it went down in the same span.
+                    // Needs more advanced focus handling than we have at time of writing this comment.
+                    self.open_url(context, &url, &target);
+                }
+            }
+
+            return ClipEventResult::Handled;
         }
 
-        if let Some((url, target)) = link_to_open {
-            if !url.is_empty() {
-                // TODO: This fires on mouse DOWN but it should be mouse UP...
-                // but only if it went down in the same span.
-                // Needs more advanced focus handling than we have at time of writing this comment.
-                self.open_url(context, &url, &target);
+        if let ClipEvent::MouseMove = event {
+            // If a mouse has moved and this EditTest is pressed, we need to update the selection.
+            if InteractiveObject::option_ptr_eq(context.mouse_data.pressed, self.as_interactive()) {
+                if let Some(mut selection) = self.selection() {
+                    if let Some(position) = self.screen_position_to_index(*context.mouse_position) {
+                        selection.to = position;
+                        self.set_selection(Some(selection), context.gc());
+                    }
+                }
             }
         }
 
-        ClipEventResult::Handled
+        ClipEventResult::NotHandled
     }
 
     fn mouse_pick_avm1(
@@ -2442,7 +2468,7 @@ impl<'gc> TInteractiveObject<'gc> for EditText<'gc> {
     ) {
         let is_avm1 = !self.movie().is_action_script_3();
         if !focused && is_avm1 {
-            self.0.write(context.gc_context).selection = None;
+            self.set_selection(None, context.gc_context);
         }
     }
 
@@ -2459,11 +2485,7 @@ impl<'gc> TInteractiveObject<'gc> for EditText<'gc> {
         self.tab_enabled(context)
     }
 
-    fn tab_enabled_avm1(&self, context: &mut UpdateContext<'_, 'gc>) -> bool {
-        self.get_avm1_boolean_property(context, "tabEnabled", |_| true)
-    }
-
-    fn tab_enabled_avm2_default(&self, _context: &mut UpdateContext<'_, 'gc>) -> bool {
+    fn tab_enabled_default(&self, _context: &mut UpdateContext<'_, 'gc>) -> bool {
         self.is_editable()
     }
 }
@@ -2507,6 +2529,14 @@ pub struct TextSelection {
     /// The time the caret should begin blinking
     blink_epoch: DateTime<Utc>,
 }
+
+impl PartialEq for TextSelection {
+    fn eq(&self, other: &Self) -> bool {
+        self.from == other.from && self.to == other.to
+    }
+}
+
+impl Eq for TextSelection {}
 
 /// Information about the start and end y-coordinates of a given line of text
 #[derive(Copy, Clone, Debug)]

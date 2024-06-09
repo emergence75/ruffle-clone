@@ -84,7 +84,7 @@ pub struct Opt {
     pub quality: Option<StageQuality>,
 
     /// The alignment of the stage.
-    #[clap(long, short)]
+    #[clap(long, short, value_parser(parse_align))]
     pub align: Option<StageAlign>,
 
     /// Prevent movies from changing the stage alignment.
@@ -148,6 +148,15 @@ pub struct Opt {
     /// Spoofs the root SWF URL provided to ActionScript.
     #[clap(long, value_parser)]
     pub spoof_url: Option<Url>,
+
+    /// Spoofs the HTTP referer header.
+    #[clap(long, value_parser)]
+    pub referer: Option<Url>,
+
+    /// Spoofs the HTTP cookie header.
+    /// This is a string of the form "name1=value1; name2=value2".
+    #[clap(long)]
+    pub cookie: Option<String>,
 
     /// The version of the player to emulate
     #[clap(long)]
@@ -219,6 +228,12 @@ fn parse_movie_file_or_url(path: &str) -> Result<Url, Error> {
 
 fn parse_duration_seconds(value: &str) -> Result<Duration, Error> {
     Ok(Duration::from_secs_f64(value.parse()?))
+}
+
+fn parse_align(value: &str) -> Result<StageAlign, Error> {
+    value
+        .parse()
+        .map_err(|_| anyhow::anyhow!("Invalid stage alignment"))
 }
 
 fn parse_gamepad_button(mapping: &str) -> Result<(GamepadButton, KeyCode), Error> {

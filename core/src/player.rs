@@ -1125,6 +1125,19 @@ impl Player {
                 }
             }
 
+            // KeyPress events also take precedence over tabbing.
+            if !key_press_handled {
+                if let PlayerEvent::KeyDown {
+                    key_code: KeyCode::Tab,
+                    ..
+                } = event
+                {
+                    let reversed = context.input.is_key_down(KeyCode::Shift);
+                    let tracker = context.focus_tracker;
+                    tracker.cycle(context, reversed);
+                }
+            }
+
             // KeyPress events also take precedence over keyboard navigation.
             // Note that keyboard navigation works only when the highlight is visible.
             if !key_press_handled && context.focus_tracker.highlight().is_visible() {
@@ -1198,18 +1211,6 @@ impl Player {
             if self.update_mouse_state(is_mouse_button_changed, true) {
                 self.needs_render = true;
             }
-        }
-
-        if let PlayerEvent::KeyDown {
-            key_code: KeyCode::Tab,
-            ..
-        } = event
-        {
-            self.mutate_with_update_context(|context| {
-                let reversed = context.input.is_key_down(KeyCode::Shift);
-                let tracker = context.focus_tracker;
-                tracker.cycle(context, reversed);
-            });
         }
 
         if self.should_reset_highlight(event) {
@@ -1292,14 +1293,14 @@ impl Player {
                 // Turn the dragged object invisible so that we don't pick it.
                 // TODO: This could be handled via adding a `HitTestOptions::SKIP_DRAGGED`.
                 let was_visible = display_object.visible();
-                display_object.set_visible(context.gc_context, false);
+                display_object.set_visible(context, false);
                 // Set `_droptarget` to the object the mouse is hovering over.
                 let drop_target_object = run_mouse_pick(context, false);
                 movie_clip.set_drop_target(
                     context.gc_context,
                     drop_target_object.map(|d| d.as_displayobject()),
                 );
-                display_object.set_visible(context.gc_context, was_visible);
+                display_object.set_visible(context, was_visible);
             }
         }
     }
@@ -1553,6 +1554,9 @@ impl Player {
                 for (object, event) in events {
                     let display_object = object.as_displayobject();
                     if !display_object.avm1_removed() {
+                        if event == ClipEvent::Press {
+                            Self::update_focus_on_mouse_press(context, display_object);
+                        }
                         object.handle_clip_event(context, event);
                         if display_object.movie().is_action_script_3() {
                             object.event_dispatch_to_avm2(context, event);
@@ -1584,6 +1588,23 @@ impl Player {
         self.mouse_cursor_needs_check = mouse_cursor_needs_check;
 
         needs_render
+    }
+
+    fn update_focus_on_mouse_press(context: &mut UpdateContext, pressed_object: DisplayObject) {
+        let is_avm2 = context.swf.is_action_script_3();
+
+        // Update AVM1 focus
+        if !is_avm2 {
+            let tracker = context.focus_tracker;
+            // In AVM1 text fields are somewhat special when handling focus.
+            // When a text field is clicked, it gains focus,
+            // when something else is clicked, it loses the focus.
+            // However, this logic only applies to text fields, other objects
+            // (buttons, movie clips) neither gain focus nor lose it upon press.
+            if tracker.get_as_edit_text().is_some() && pressed_object.as_edit_text().is_none() {
+                tracker.set(None, context);
+            }
+        }
     }
 
     //Checks if two displayObjects have the same depth and id and accur in the same movie.s
@@ -1667,6 +1688,8 @@ impl Player {
             if did_finish {
                 did_finish = LoadManager::preload_tick(context, limit);
             }
+
+            Self::run_actions(context);
 
             did_finish
         })
@@ -2301,6 +2324,13 @@ impl PlayerBuilder {
         self
     }
 
+    /// Sets the audio backend of the player.
+    #[inline]
+    pub fn with_boxed_audio(mut self, audio: Box<dyn AudioBackend>) -> Self {
+        self.audio = Some(audio);
+        self
+    }
+
     /// Sets the logging backend of the player.
     #[inline]
     pub fn with_log(mut self, log: impl 'static + LogBackend) -> Self {
@@ -2784,7 +2814,7 @@ impl FromStr for PlayerRuntime {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let player_runtime = match s {
             "air" => PlayerRuntime::AIR,
-            "flashPlayer" => PlayerRuntime::FlashPlayer,
+            "flash_player" => PlayerRuntime::FlashPlayer,
             _ => return Err(ParseEnumError),
         };
         Ok(player_runtime)
