@@ -863,6 +863,7 @@ impl<'gc> MovieClip<'gc> {
         context: &mut UpdateContext<'_, 'gc>,
         reader: &mut SwfStream<'_>,
     ) -> Result<(), Error> {
+        assert!(self.is_root(), "Found SymbolClass in non-root movie");
         let movie = self.movie();
         let mut activation = Avm2Activation::from_nothing(context.reborrow());
 
@@ -914,7 +915,6 @@ impl<'gc> MovieClip<'gc> {
                         .library_for_movie_mut(movie.clone());
 
                     if id == 0 {
-                        //TODO: This assumes only the root movie has `SymbolClass` tags.
                         self.set_avm2_class(activation.context.gc_context, Some(class_object));
                     } else {
                         match library.character_by_id(id) {
