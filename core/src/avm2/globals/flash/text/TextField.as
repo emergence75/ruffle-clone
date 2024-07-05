@@ -132,6 +132,7 @@ package flash.text {
         public native function replaceSelectedText(value:String):void;
         public native function replaceText(beginIndex:int, endIndex:int, newText:String):void;
         public native function setSelection(beginIndex:int, endIndex:int):void;
+        public native function getTextRuns():Array;
 
         public native function get selectedText():String;
 
@@ -139,17 +140,13 @@ package flash.text {
             stub_method("flash.text.TextField", "insertXMLText");
         }
 
-        public function getCharIndexAtPoint(x:Number, y:Number):int {
-            stub_method("flash.text.TextField", "getCharIndexAtPoint");
-            return 0;
-        }
+        public native function getCharIndexAtPoint(x:Number, y:Number):int;
 
-        public function getLineLength(lineIndex:int):int {
-            stub_method("flash.text.TextField", "getLineLength");
-            return 0;
-        }
+        public native function getLineLength(lineIndex:int):int;
 
         public native function getLineText(lineIndex:int):String;
+
+        public native function getLineOffset(lineIndex:int):int;
 
         public function getCharBoundaries(charIndex:int):Rectangle {
             stub_method("flash.text.TextField", "getCharBoundaries");
@@ -166,20 +163,9 @@ package flash.text {
             return null;
         }
 
-        public function getLineIndexAtPoint(x:Number, y:Number):int {
-            stub_method("flash.text.TextField", "getLineIndexAtPoint");
-            return 0;
-        }
+        public native function getLineIndexAtPoint(x:Number, y:Number):int;
 
-        public function getLineIndexOfChar(charIndex:int):int {
-            stub_method("flash.text.TextField", "getLineIndexOfChar");
-            return 0;
-        }
-
-        public function getLineOffset(lineIndex:int):int {
-            stub_method("flash.text.TextField", "getLineOffset");
-            return 0;
-        }
+        public native function getLineIndexOfChar(charIndex:int):int;
 
         public function getParagraphLength(charIndex:int):int {
             stub_method("flash.text.TextField", "getParagraphLength");

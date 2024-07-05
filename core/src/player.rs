@@ -56,7 +56,6 @@ use ruffle_render::commands::CommandList;
 use ruffle_render::quality::StageQuality;
 use ruffle_render::transform::TransformStack;
 use ruffle_video::backend::VideoBackend;
-use serde::Deserialize;
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
 use std::ops::DerefMut;
@@ -602,7 +601,7 @@ impl Player {
                 // no AVM1 or AVM2 object - so just prepare the builtin items
                 let mut menu = ContextMenuState::new();
                 let builtin_items = BuiltInItemFlags::for_stage(context.stage);
-                menu.build_builtin_items(builtin_items, context.stage, &context.ui.language());
+                menu.build_builtin_items(builtin_items, context);
                 menu
             };
 
@@ -674,6 +673,9 @@ impl Player {
                     }
                     ContextMenuCallback::QualityHigh => {
                         context.stage.set_quality(context, StageQuality::High)
+                    }
+                    ContextMenuCallback::TextControl { code, text } => {
+                        text.text_control_input(*code, context)
                     }
                     _ => {}
                 }
@@ -1554,12 +1556,12 @@ impl Player {
                 for (object, event) in events {
                     let display_object = object.as_displayobject();
                     if !display_object.avm1_removed() {
-                        if event == ClipEvent::Press {
-                            Self::update_focus_on_mouse_press(context, display_object);
-                        }
                         object.handle_clip_event(context, event);
                         if display_object.movie().is_action_script_3() {
                             object.event_dispatch_to_avm2(context, event);
+                        }
+                        if event == ClipEvent::Press {
+                            Self::update_focus_on_mouse_press(context, display_object);
                         }
                     }
                     if !refresh && event.is_button_event() {
@@ -1591,17 +1593,22 @@ impl Player {
     }
 
     fn update_focus_on_mouse_press(context: &mut UpdateContext, pressed_object: DisplayObject) {
-        let is_avm2 = context.swf.is_action_script_3();
+        let tracker = context.focus_tracker;
+        let Some(focus) = tracker.get() else {
+            return;
+        };
+        let focus_do = focus.as_displayobject();
+
+        let is_avm2 = focus_do.movie().is_action_script_3();
 
         // Update AVM1 focus
         if !is_avm2 {
-            let tracker = context.focus_tracker;
             // In AVM1 text fields are somewhat special when handling focus.
             // When a text field is clicked, it gains focus,
             // when something else is clicked, it loses the focus.
             // However, this logic only applies to text fields, other objects
             // (buttons, movie clips) neither gain focus nor lose it upon press.
-            if tracker.get_as_edit_text().is_some() && pressed_object.as_edit_text().is_none() {
+            if focus_do.as_edit_text().is_some() && pressed_object.as_edit_text().is_none() {
                 tracker.set(None, context);
             }
         }
@@ -1720,6 +1727,7 @@ impl Player {
             run_all_phases_avm2(context);
             Avm1::run_frame(context);
             AudioManager::update_sounds(context);
+            LocalConnections::update_connections(context);
 
             // Only run the current list of callbacks - any callbacks added during callback execution
             // will be run at the end of the *next* frame.
@@ -2799,7 +2807,8 @@ fn run_mouse_pick<'gc>(
 }
 
 #[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
-#[derive(Default, Clone, Copy, Debug, Eq, PartialEq, Deserialize)]
+#[derive(Default, Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Deserialize))]
 pub enum PlayerRuntime {
     #[default]
     FlashPlayer,

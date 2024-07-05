@@ -1,10 +1,7 @@
 use ruffle_wstr::WString;
 
 use crate::avm2::object::TObject;
-use crate::avm2::Activation;
-use crate::avm2::AvmString;
-use crate::avm2::Multiname;
-use crate::avm2::Value;
+use crate::avm2::{Activation, AvmString, Class, Multiname, Value};
 use std::borrow::Cow;
 use std::fmt::Debug;
 use std::mem::size_of;
@@ -94,13 +91,12 @@ pub fn make_reference_error<'gc>(
     activation: &mut Activation<'_, 'gc>,
     code: ReferenceErrorCode,
     multiname: &Multiname<'gc>,
-    object_class: Option<ClassObject<'gc>>,
+    object_class: Option<Class<'gc>>,
 ) -> Error<'gc> {
     let qualified_name = multiname.as_uri(activation.context.gc_context);
     let class_name = object_class
         .map(|cls| {
-            cls.inner_class_definition()
-                .name()
+            cls.name()
                 .to_qualified_name_err_message(activation.context.gc_context)
         })
         .unwrap_or_else(|| AvmString::from("<UNKNOWN>"));
@@ -384,6 +380,24 @@ pub fn make_error_1118<'gc>(activation: &mut Activation<'_, 'gc>) -> Error<'gc> 
 
 #[inline(never)]
 #[cold]
+pub fn make_error_1125<'gc>(
+    activation: &mut Activation<'_, 'gc>,
+    index: usize,
+    range: usize,
+) -> Error<'gc> {
+    let err = range_error(
+        activation,
+        &format!("Error #1125: The index {index} is out of range {range}."),
+        1125,
+    );
+    match err {
+        Ok(err) => Error::AvmError(err),
+        Err(err) => err,
+    }
+}
+
+#[inline(never)]
+#[cold]
 pub fn make_error_1127<'gc>(activation: &mut Activation<'_, 'gc>) -> Error<'gc> {
     let err = type_error(
         activation,
@@ -421,6 +435,31 @@ pub fn make_error_1508<'gc>(activation: &mut Activation<'_, 'gc>, param_name: &s
         ),
         1508,
     );
+    match err {
+        Ok(err) => Error::AvmError(err),
+        Err(err) => err,
+    }
+}
+
+pub enum Error2004Type {
+    Error,
+    ArgumentError,
+    TypeError,
+}
+
+#[inline(never)]
+#[cold]
+pub fn make_error_2004<'gc>(
+    activation: &mut Activation<'_, 'gc>,
+    kind: Error2004Type,
+) -> Error<'gc> {
+    let message = "Error #2004: One of the parameters is invalid.";
+    let code = 2004;
+    let err = match kind {
+        Error2004Type::Error => error(activation, message, code),
+        Error2004Type::ArgumentError => argument_error(activation, message, code),
+        Error2004Type::TypeError => type_error(activation, message, code),
+    };
     match err {
         Ok(err) => Error::AvmError(err),
         Err(err) => err,
@@ -496,6 +535,23 @@ pub fn make_error_2037<'gc>(activation: &mut Activation<'_, 'gc>) -> Error<'gc> 
         activation,
         "Error #2037: Functions called in incorrect sequence, or earlier call was unsuccessful.",
         2037,
+    );
+    match err {
+        Ok(err) => Error::AvmError(err),
+        Err(err) => err,
+    }
+}
+
+#[inline(never)]
+#[cold]
+pub fn make_error_2085<'gc>(activation: &mut Activation<'_, 'gc>, param_name: &str) -> Error<'gc> {
+    let err = argument_error(
+        activation,
+        &format!(
+            "Error #2085: Parameter {} must be non-empty string.",
+            param_name
+        ),
+        2007,
     );
     match err {
         Ok(err) => Error::AvmError(err),

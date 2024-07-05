@@ -10,10 +10,20 @@ update-ruffle = تحديث رفل
 ruffle-demo = ويب التجريبي
 ruffle-desktop = برنامج سطح المكتب
 ruffle-wiki = عرض ويكي Ruffle
-enable-hardware-acceleration = يبدو أن تسارع الأجهزة غير مفعل. بينما قد يعمل Ruffle، قد يكون بطيئاً بشكل غير معقول. يمكنك معرفة كيفية تمكين تسارع الأجهزة من خلال متابعة هذا الرابط.
+enable-hardware-acceleration = يبدو أن تسريع الجهاز معطل. على الرغم من أن Ruffle قد يعمل، إلا أنه قد يكون بطيئًا جدًا. يمكنك معرفة كيفية تمكين تسريع الأجهزة باتباع الرابط أدناه:
+enable-hardware-acceleration-link = الأسئلة الشائعة - تسريع أجهزة Chrome
 view-error-details = عرض تفاصيل الخطأ
 open-in-new-tab = فتح في علامة تبويب جديدة
 click-to-unmute = انقر لإلغاء الكتم
+clipboard-message-title = النسخ واللصق في Ruffle
+clipboard-message-description =
+    {$variant ->
+       *[unsupported] متصفحك لا يدعم الوصول للحافظة الكاملة،
+        [access-denied] تم رفض الوصول للحافظة،
+    } لكن يمكنك إستخدام هذه الاختصارات دائمًا:
+clipboard-message-copy = { " " } للنسخ
+clipboard-message-cut = { " " } للقص
+clipboard-message-paste = { " " } للصق
 error-file-protocol =
     يبدو أنك تقوم بتشغيل Ruffle على بروتوكول "الملف:".
     هذا لن يعمل لأن المتصفحات تمنع العديد من الميزات من العمل لأسباب أمنية.

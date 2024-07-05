@@ -53,7 +53,6 @@ async function queryTabStatus(
     }
 
     activeTab = tabs[0]!;
-
     // FIXME: `activeTab.url` returns `undefined` on Chrome as it requires the `tabs`
     // permission, which we don't set in `manifest.json5` because of #11098.
     const url = activeTab.url ? new URL(activeTab.url) : null;
@@ -74,9 +73,18 @@ async function queryTabStatus(
             type: "ping",
         });
     } catch (e) {
-        listener("status_result_protected");
-        reloadButton.disabled = true;
-        return;
+        // Try again after 0.2 seconds, Firefox takes some time to grant temporary
+        // host permissions when the <all_urls> permission has not been granted.
+        await new Promise((resolve) => setTimeout(resolve, 200));
+        try {
+            response = await utils.tabs.sendMessage(activeTab.id!, {
+                type: "ping",
+            });
+        } catch (e) {
+            listener("status_result_protected");
+            reloadButton.disabled = true;
+            return;
+        }
     }
 
     if (!response) {
@@ -138,14 +146,14 @@ function optionsChanged() {
     reloadButton.disabled = !isDifferent;
 }
 
-function displayTabStatus() {
-    queryTabStatus((status) => {
+async function displayTabStatus() {
+    await queryTabStatus((status) => {
         statusIndicator.style.setProperty("--color", STATUS_COLORS[status]);
         statusText.textContent = utils.i18n.getMessage(status);
     });
 }
 
-window.addEventListener("DOMContentLoaded", () => {
+window.addEventListener("DOMContentLoaded", async () => {
     bindOptions((options) => {
         savedOptions = options;
         optionsChanged();
@@ -187,5 +195,25 @@ window.addEventListener("DOMContentLoaded", () => {
         window.close();
     });
 
-    displayTabStatus();
+    await displayTabStatus();
+    const permissionsButton = document.getElementById(
+        "permissions-button",
+    ) as HTMLButtonElement;
+    permissionsButton.textContent = utils.i18n.getMessage(
+        "grant_single_site_permission",
+    );
+    const url = activeTab?.url ? new URL(activeTab.url) : null;
+    if (
+        url &&
+        ["https:", "http:"].includes(url.protocol) &&
+        !(await utils.hasHostPermissionForActiveTab())
+    ) {
+        permissionsButton.classList.remove("hidden");
+        permissionsButton.addEventListener("click", () => {
+            utils.permissions.request({
+                origins: [url.toString()],
+            });
+            window.close();
+        });
+    }
 });

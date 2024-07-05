@@ -971,7 +971,6 @@ pub fn render_base<'gc>(this: DisplayObject<'gc>, context: &mut RenderContext<'_
                 Matrix::create_box(
                     bounds.width().to_pixels() as f32,
                     bounds.height().to_pixels() as f32,
-                    0.0,
                     bounds.x_min,
                     bounds.y_min,
                 ),
@@ -1147,6 +1146,17 @@ pub trait TDisplayObject<'gc>:
     /// The world bounding box of this object including children, relative to the stage.
     fn world_bounds(&self) -> Rectangle<Twips> {
         self.bounds_with_transform(&self.local_to_global_matrix())
+    }
+
+    /// Bounds used for drawing debug rects and picking objects.
+    fn debug_rect_bounds(&self) -> Rectangle<Twips> {
+        // Make the rect at least as big as highlight bounds to ensure that anything
+        // interactive is also highlighted even if not included in world bounds.
+        let highlight_bounds = self
+            .as_interactive()
+            .map(|int| int.highlight_bounds())
+            .unwrap_or_default();
+        self.world_bounds().union(&highlight_bounds)
     }
 
     /// Gets the bounds of this object and all children, transformed by a given matrix.

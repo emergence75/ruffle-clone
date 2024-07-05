@@ -10,6 +10,7 @@ use ruffle_core::backend::navigator::{
 use ruffle_core::indexmap::IndexMap;
 use ruffle_core::loader::Error;
 use ruffle_core::socket::{ConnectionState, SocketAction, SocketHandle};
+use ruffle_core::swf::Encoding;
 use ruffle_socket_format::SocketEvent;
 use std::borrow::Cow;
 use std::time::Duration;
@@ -33,14 +34,8 @@ impl SuccessResponse for TestResponse {
         Box::pin(async move { Ok(self.body) })
     }
 
-    fn next_chunk(&mut self) -> OwnedFuture<Option<Vec<u8>>, Error> {
-        if !self.chunk_gotten {
-            self.chunk_gotten = true;
-            let body = self.body.clone();
-            Box::pin(async move { Ok(Some(body)) })
-        } else {
-            Box::pin(async move { Ok(None) })
-        }
+    fn text_encoding(&self) -> Option<&'static Encoding> {
+        None
     }
 
     fn status(&self) -> u16 {
@@ -49,6 +44,16 @@ impl SuccessResponse for TestResponse {
 
     fn redirected(&self) -> bool {
         self.redirected
+    }
+
+    fn next_chunk(&mut self) -> OwnedFuture<Option<Vec<u8>>, Error> {
+        if !self.chunk_gotten {
+            self.chunk_gotten = true;
+            let body = self.body.clone();
+            Box::pin(async move { Ok(Some(body)) })
+        } else {
+            Box::pin(async move { Ok(None) })
+        }
     }
 
     fn expected_length(&self) -> Result<Option<u64>, Error> {

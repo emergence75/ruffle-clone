@@ -10,10 +10,20 @@ update-ruffle = Обновить Ruffle
 ruffle-demo = Веб-демо
 ruffle-desktop = Настольное приложение
 ruffle-wiki = Открыть вики Ruffle
-enable-hardware-acceleration = Похоже, что аппаратное ускорение не включено. Хоть Ruffle и будет работать, он может быть неоправданно медленным. О том, как включить аппаратное ускорение, можно узнать, перейдя по ссылке.
+enable-hardware-acceleration = Похоже, что аппаратное ускорение отключено. Хотя Ruffle может работать, но он может быть очень медленным. Вы можете узнать, как включить аппаратное ускорение, перейдя по ссылке ниже:
+enable-hardware-acceleration-link = FAQ - Аппаратное ускорение Chrome
 view-error-details = Сведения об ошибке
 open-in-new-tab = Открыть в новой вкладке
 click-to-unmute = Включить звук
+clipboard-message-title = Копирование и вставка в Ruffle
+clipboard-message-description =
+    { $variant ->
+       *[unsupported] Ваш браузер не поддерживает полный доступ к буферу обмена.
+        [access-denied]  Доступ к буферу обмена был отклонён.
+    } Используйте сочетания клавиш для вырезания, копирования и вставки:
+clipboard-message-copy = { " " } копировать
+clipboard-message-cut = { " " } вырезать
+clipboard-message-paste = { " " } вставить
 error-file-protocol =
     Похоже, что вы запускаете Ruffle по протоколу "file:".
     Это не работает, поскольку браузеры блокируют работу многих функций по соображениям безопасности.

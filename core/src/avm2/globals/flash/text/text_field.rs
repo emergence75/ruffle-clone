@@ -6,12 +6,12 @@ use crate::avm2::globals::flash::display::display_object::initialize_for_allocat
 use crate::avm2::object::{ClassObject, Object, TObject, TextFormatObject};
 use crate::avm2::parameters::ParametersExt;
 use crate::avm2::value::Value;
-use crate::avm2::Error;
+use crate::avm2::{ArrayObject, ArrayStorage, Error};
 use crate::display_object::{AutoSizeMode, EditText, TDisplayObject, TextSelection};
 use crate::html::TextFormat;
 use crate::string::AvmString;
-use crate::{avm2_stub_getter, avm2_stub_setter};
-use swf::Color;
+use crate::{avm2_stub_getter, avm2_stub_method, avm2_stub_setter};
+use swf::{Color, Point};
 
 pub fn text_field_allocator<'gc>(
     class: ClassObject<'gc>,
@@ -1147,6 +1147,30 @@ pub fn get_line_metrics<'gc>(
     Ok(Value::Undefined)
 }
 
+pub fn get_line_length<'gc>(
+    activation: &mut Activation<'_, 'gc>,
+    this: Object<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, Error<'gc>> {
+    let Some(this) = this
+        .as_display_object()
+        .and_then(|this| this.as_edit_text())
+    else {
+        return Ok(Value::Undefined);
+    };
+
+    let line_num = args.get_i32(activation, 0)?;
+    if line_num < 0 {
+        return Err(make_error_2006(activation));
+    }
+
+    if let Some(length) = this.line_length(line_num as usize) {
+        Ok(length.into())
+    } else {
+        Err(make_error_2006(activation))
+    }
+}
+
 pub fn get_line_text<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Object<'gc>,
@@ -1165,6 +1189,30 @@ pub fn get_line_text<'gc>(
     }
 
     Ok(Value::Undefined)
+}
+
+pub fn get_line_offset<'gc>(
+    activation: &mut Activation<'_, 'gc>,
+    this: Object<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, Error<'gc>> {
+    let Some(this) = this
+        .as_display_object()
+        .and_then(|this| this.as_edit_text())
+    else {
+        return Ok(Value::Undefined);
+    };
+
+    let line_num = args.get_i32(activation, 0)?;
+    if line_num < 0 {
+        return Err(make_error_2006(activation));
+    }
+
+    if let Some(offset) = this.line_offset(line_num as usize) {
+        Ok(offset.into())
+    } else {
+        Err(make_error_2006(activation))
+    }
 }
 
 pub fn get_bottom_scroll_v<'gc>(
@@ -1395,4 +1443,130 @@ pub fn get_selected_text<'gc>(
         return Ok(AvmString::new(activation.context.gc(), &text[start_index..end_index]).into());
     }
     Ok("".into())
+}
+
+pub fn get_text_runs<'gc>(
+    activation: &mut Activation<'_, 'gc>,
+    this: Object<'gc>,
+    _args: &[Value<'gc>],
+) -> Result<Value<'gc>, Error<'gc>> {
+    let Some(this) = this
+        .as_display_object()
+        .and_then(|this| this.as_edit_text())
+    else {
+        return Ok(Value::Undefined);
+    };
+
+    let textrun_class = activation.avm2().classes().textrun;
+
+    let array = this
+        .spans()
+        .iter_spans()
+        .filter(|(start, end, _, _)| {
+            // Flash never returns empty spans here, but we currently require
+            // that at least one span is present albeit an empty one.
+            start != end
+        })
+        .map(|(start, end, _, format)| {
+            let tf = TextFormatObject::from_text_format(activation, format.get_text_format())?;
+            textrun_class.construct(activation, &[start.into(), end.into(), tf.into()])
+        })
+        .collect::<Result<ArrayStorage<'gc>, Error<'gc>>>()?;
+    Ok(ArrayObject::from_storage(activation, array)?.into())
+}
+
+pub fn get_line_index_of_char<'gc>(
+    activation: &mut Activation<'_, 'gc>,
+    this: Object<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, Error<'gc>> {
+    let Some(this) = this
+        .as_display_object()
+        .and_then(|this| this.as_edit_text())
+    else {
+        return Ok(Value::Undefined);
+    };
+
+    let index = args.get_i32(activation, 0)?;
+    if index < 0 {
+        // Docs say "throw RangeError", reality says "return -1".
+        return Ok(Value::Number(-1f64));
+    }
+
+    if let Some(line) = this.line_index_of_char(index as usize) {
+        Ok(line.into())
+    } else {
+        Ok(Value::Number(-1f64))
+    }
+}
+
+pub fn get_char_index_at_point<'gc>(
+    activation: &mut Activation<'_, 'gc>,
+    this: Object<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, Error<'gc>> {
+    // TODO This currently uses screen_position_to_index, which is inaccurate, because:
+    //   1. getCharIndexAtPoint should return -1 when clicked outside of a character,
+    //   2. screen_position_to_index returns caret index, not clicked character index.
+    //   Currently, it is difficult to prove accuracy of this method, as at the time
+    //   of writing this comment, text layout behaves differently compared to Flash.
+    //   However, the current implementation is good enough to make some SWFs work.
+    avm2_stub_method!(
+        activation,
+        "flash.text.TextField",
+        "getCharIndexAtPoint",
+        "inaccurate char index detection"
+    );
+
+    let Some(this) = this
+        .as_display_object()
+        .and_then(|this| this.as_edit_text())
+    else {
+        return Ok(Value::Undefined);
+    };
+
+    let x = args.get_f64(activation, 0)?;
+    let y = args.get_f64(activation, 1)?;
+
+    if let Some(index) = this.screen_position_to_index(Point::from_pixels(x, y)) {
+        Ok(index.into())
+    } else {
+        Ok(Value::Number(-1f64))
+    }
+}
+
+pub fn get_line_index_at_point<'gc>(
+    activation: &mut Activation<'_, 'gc>,
+    this: Object<'gc>,
+    args: &[Value<'gc>],
+) -> Result<Value<'gc>, Error<'gc>> {
+    // TODO This currently uses screen_position_to_index, but it should calculate
+    //   the line index using only line data, without taking into account characters.
+    //   Currently, it is difficult to prove accuracy of this method, as at the time
+    //   of writing this comment, text layout behaves differently compared to Flash.
+    avm2_stub_method!(
+        activation,
+        "flash.text.TextField",
+        "getLineIndexAtPoint",
+        "inaccurate line index detection"
+    );
+
+    let Some(this) = this
+        .as_display_object()
+        .and_then(|this| this.as_edit_text())
+    else {
+        return Ok(Value::Undefined);
+    };
+
+    let x = args.get_f64(activation, 0)?;
+    let y = args.get_f64(activation, 1)?;
+
+    if let Some(index) = this
+        .screen_position_to_index(Point::from_pixels(x, y))
+        .and_then(|index| this.line_index_of_char(index))
+    {
+        Ok(index.into())
+    } else {
+        Ok(Value::Number(-1f64))
+    }
 }

@@ -165,6 +165,7 @@ pub struct SystemClasses<'gc> {
     pub netstatusevent: ClassObject<'gc>,
     pub shaderfilter: ClassObject<'gc>,
     pub statusevent: ClassObject<'gc>,
+    pub asyncerrorevent: ClassObject<'gc>,
     pub contextmenuevent: ClassObject<'gc>,
     pub filereference: ClassObject<'gc>,
     pub filefilter: ClassObject<'gc>,
@@ -175,6 +176,7 @@ pub struct SystemClasses<'gc> {
     pub focusevent: ClassObject<'gc>,
     pub dictionary: ClassObject<'gc>,
     pub id3info: ClassObject<'gc>,
+    pub textrun: ClassObject<'gc>,
 }
 
 impl<'gc> SystemClasses<'gc> {
@@ -293,6 +295,7 @@ impl<'gc> SystemClasses<'gc> {
             netstatusevent: object,
             shaderfilter: object,
             statusevent: object,
+            asyncerrorevent: object,
             contextmenuevent: object,
             filereference: object,
             filefilter: object,
@@ -303,6 +306,7 @@ impl<'gc> SystemClasses<'gc> {
             focusevent: object,
             dictionary: object,
             id3info: object,
+            textrun: object,
         }
     }
 }
@@ -419,18 +423,17 @@ fn vector_class<'gc>(
     let mc = activation.context.gc_context;
     let (_, global, mut domain) = script.init();
 
-    let cls = param_class.map(|c| c.inner_class_definition());
+    let param_class = param_class.map(|c| c.inner_class_definition());
     let vector_cls = class(
-        vector::create_builtin_class(activation, cls),
+        vector::create_builtin_class(activation, param_class),
         script,
         activation,
     )?;
-    vector_cls.set_param(mc, Some(param_class));
 
     let generic_vector = activation.avm2().classes().generic_vector;
     generic_vector.add_application(mc, param_class, vector_cls);
     let generic_cls = generic_vector.inner_class_definition();
-    generic_cls.add_application(mc, cls, vector_cls.inner_class_definition());
+    generic_cls.add_application(mc, param_class, vector_cls.inner_class_definition());
 
     let legacy_name = QName::new(activation.avm2().vector_internal_namespace, legacy_name);
     global.install_const_late(
@@ -805,6 +808,7 @@ fn load_playerglobal<'gc>(
             ("flash.events", "UncaughtErrorEvents", uncaughterrorevents),
             ("flash.events", "NetStatusEvent", netstatusevent),
             ("flash.events", "StatusEvent", statusevent),
+            ("flash.events", "AsyncErrorEvent", asyncerrorevent),
             ("flash.events", "ContextMenuEvent", contextmenuevent),
             ("flash.events", "FocusEvent", focusevent),
             ("flash.geom", "Matrix", matrix),
@@ -827,6 +831,7 @@ fn load_playerglobal<'gc>(
             ("flash.text", "TextFormat", textformat),
             ("flash.text", "TextField", textfield),
             ("flash.text", "TextLineMetrics", textlinemetrics),
+            ("flash.text", "TextRun", textrun),
             ("flash.text.engine", "TextLine", textline),
             ("flash.filters", "BevelFilter", bevelfilter),
             ("flash.filters", "BitmapFilter", bitmapfilter),

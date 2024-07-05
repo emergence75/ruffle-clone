@@ -1,7 +1,7 @@
 //! Class object impl
 
 use crate::avm2::activation::Activation;
-use crate::avm2::class::{Allocator, AllocatorFn, Class, ClassHashWrapper};
+use crate::avm2::class::{Allocator, AllocatorFn, Class};
 use crate::avm2::error::{argument_error, make_error_1127, reference_error, type_error};
 use crate::avm2::function::exec;
 use crate::avm2::method::Method;
@@ -20,7 +20,6 @@ use crate::string::AvmString;
 use fnv::FnvHashMap;
 use gc_arena::{Collect, GcCell, GcWeakCell, Mutation};
 use std::cell::{BorrowError, Ref, RefMut};
-use std::collections::HashSet;
 use std::fmt::Debug;
 use std::hash::{Hash, Hasher};
 
@@ -62,24 +61,6 @@ pub struct ClassObjectData<'gc> {
     #[collect(require_static)]
     instance_allocator: Allocator,
 
-    /// The instance constructor function
-    constructor: Method<'gc>,
-
-    /// The native instance constructor function
-    native_constructor: Method<'gc>,
-
-    /// The customization point for `Class(args...)` without `new`
-    /// If None, a simple coercion is done.
-    call_handler: Option<Method<'gc>>,
-
-    /// The parameters of this specialized class.
-    ///
-    /// None flags that this class has not been specialized.
-    ///
-    /// An individual parameter of `None` signifies the parameter `*`, which is
-    /// represented in AVM2 as `null` with regards to type application.
-    params: Option<Option<ClassObject<'gc>>>,
-
     /// List of all applications of this class.
     ///
     /// Only applicable if this class is generic.
@@ -88,13 +69,7 @@ pub struct ClassObjectData<'gc> {
     /// as `None` here. AVM2 considers both applications to be separate
     /// classes, though we consider the parameter to be the class `Object` when
     /// we get a param of `null`.
-    applications: FnvHashMap<Option<ClassObject<'gc>>, ClassObject<'gc>>,
-
-    /// Interfaces implemented by this class, including interfaces
-    /// from parent classes and superinterfaces (recursively).
-    /// TODO - avoid cloning this when a subclass implements the
-    /// same interface as its superclass.
-    interfaces: Vec<Class<'gc>>,
+    applications: FnvHashMap<Option<Class<'gc>>, ClassObject<'gc>>,
 
     /// VTable used for instances of this class.
     instance_vtable: VTable<'gc>,
@@ -209,12 +184,7 @@ impl<'gc> ClassObject<'gc> {
                 instance_scope: scope,
                 superclass_object,
                 instance_allocator: Allocator(instance_allocator),
-                constructor: class.instance_init(),
-                native_constructor: class.native_instance_init(),
-                call_handler: class.call_handler(),
-                params: None,
                 applications: Default::default(),
-                interfaces: Vec::new(),
                 instance_vtable: VTable::empty(activation.context.gc_context),
                 class_vtable: VTable::empty(activation.context.gc_context),
             },
@@ -241,15 +211,15 @@ impl<'gc> ClassObject<'gc> {
         activation: &mut Activation<'_, 'gc>,
     ) -> Result<(), Error<'gc>> {
         let class = self.inner_class_definition();
-        self.instance_of().ok_or(
+        self.instance_class().ok_or(
             "Cannot finish initialization of core class without it being linked to a type!",
         )?;
 
         class.validate_class(self.superclass_object())?;
 
         self.instance_vtable().init_vtable(
+            class,
             Some(self),
-            class.protected_namespace(),
             &class.instance_traits(),
             Some(self.instance_scope()),
             self.superclass_object().map(|cls| cls.instance_vtable()),
@@ -284,11 +254,11 @@ impl<'gc> ClassObject<'gc> {
 
         // class vtable == class traits + Class instance traits
         self.class_vtable().init_vtable(
+            class,
             Some(self),
-            class.protected_namespace(),
             &class.class_traits(),
             Some(self.class_scope()),
-            Some(self.instance_of().unwrap().instance_vtable()),
+            Some(activation.avm2().classes().class.instance_vtable()),
             &mut activation.context,
         );
 
@@ -327,43 +297,13 @@ impl<'gc> ClassObject<'gc> {
     /// instance traits will be resolved to their corresponding methods at this
     /// time.
     pub fn link_interfaces(self, activation: &mut Activation<'_, 'gc>) -> Result<(), Error<'gc>> {
-        let mut write = self.0.write(activation.context.gc_context);
-        let class = write.class;
-
-        let mut interfaces = Vec::with_capacity(class.direct_interfaces().len());
-
-        let mut dedup = HashSet::new();
-        let mut queue = vec![class];
-        while let Some(cls) = queue.pop() {
-            for interface in &*cls.direct_interfaces() {
-                if !interface.is_interface() {
-                    return Err(format!(
-                        "Class {:?} is not an interface and cannot be implemented by classes",
-                        interface.name().local_name()
-                    )
-                    .into());
-                }
-
-                if dedup.insert(ClassHashWrapper(*interface)) {
-                    queue.push(*interface);
-                    interfaces.push(*interface);
-                }
-            }
-
-            if let Some(super_class) = cls.super_class() {
-                queue.push(super_class);
-            }
-        }
-        write.interfaces = interfaces;
-        drop(write);
-
-        let read = self.0.read();
+        let class = self.inner_class_definition();
 
         // FIXME - we should only be copying properties for newly-implemented
         // interfaces (i.e. those that were not already implemented by the superclass)
         // Otherwise, our behavior diverges from Flash Player in certain cases.
         // See the ignored test 'tests/tests/swfs/avm2/weird_superinterface_properties/'
-        for interface in &read.interfaces {
+        for interface in &*class.all_interfaces() {
             for interface_trait in &*interface.instance_traits() {
                 if !interface_trait.name().namespace().is_public() {
                     let public_name = QName::new(
@@ -411,55 +351,18 @@ impl<'gc> ClassObject<'gc> {
         let scope = self.0.read().class_scope;
         let class = self.0.read().class;
 
-        if !class.is_class_initialized() {
-            let class_initializer = class.class_init();
-            let class_init_fn = FunctionObject::from_method(
-                activation,
-                class_initializer,
-                scope,
-                Some(object),
-                Some(self),
-            );
+        let class_initializer = class.class_init();
+        let class_init_fn = FunctionObject::from_method(
+            activation,
+            class_initializer,
+            scope,
+            Some(object),
+            Some(self),
+        );
 
-            class.mark_class_initialized(activation.context.gc_context);
-
-            class_init_fn.call(object.into(), &[], activation)?;
-        }
+        class_init_fn.call(object.into(), &[], activation)?;
 
         Ok(())
-    }
-
-    /// Determine if this class has a given type in its superclass chain.
-    ///
-    /// The given object `test_class` should be either a superclass or
-    /// interface we are checking against this class.
-    ///
-    /// To test if a class *instance* is of a given type, see is_of_type.
-    pub fn has_class_in_chain(self, test_class: Class<'gc>) -> bool {
-        let mut my_class = Some(self);
-
-        while let Some(class) = my_class {
-            if class.inner_class_definition() == test_class {
-                return true;
-            }
-
-            my_class = class.superclass_object()
-        }
-
-        // A `ClassObject` stores all of the interfaces it implements,
-        // including those from superinterfaces and superclasses (recursively).
-        // Therefore, we only need to check interfaces once, and we can skip
-        // checking them when we processing superclasses in the `while`
-        // further down in this method.
-        if test_class.is_interface() {
-            for interface in self.interfaces() {
-                if interface == test_class {
-                    return true;
-                }
-            }
-        }
-
-        false
     }
 
     /// Call the instance initializer.
@@ -470,7 +373,7 @@ impl<'gc> ClassObject<'gc> {
         activation: &mut Activation<'_, 'gc>,
     ) -> Result<Value<'gc>, Error<'gc>> {
         let scope = self.0.read().instance_scope;
-        let method = self.0.read().constructor;
+        let method = self.constructor();
         exec(
             method,
             scope,
@@ -494,7 +397,7 @@ impl<'gc> ClassObject<'gc> {
         activation: &mut Activation<'_, 'gc>,
     ) -> Result<Value<'gc>, Error<'gc>> {
         let scope = self.0.read().instance_scope;
-        let method = self.0.read().native_constructor;
+        let method = self.native_constructor();
         exec(
             method,
             scope,
@@ -558,16 +461,17 @@ impl<'gc> ClassObject<'gc> {
         if let Some(Property::Method { disp_id, .. }) = property {
             // todo: handle errors
             let ClassBoundMethod {
-                class,
+                class_obj,
                 scope,
                 method,
+                ..
             } = self.instance_vtable().get_full_method(disp_id).unwrap();
             let callee = FunctionObject::from_method(
                 activation,
                 method,
                 scope.expect("Scope should exist here"),
                 Some(receiver),
-                class,
+                class_obj,
             );
 
             callee.call(receiver.into(), arguments, activation)
@@ -617,16 +521,17 @@ impl<'gc> ClassObject<'gc> {
             ) => {
                 // todo: handle errors
                 let ClassBoundMethod {
-                    class,
+                    class_obj,
                     scope,
                     method,
+                    ..
                 } = self.instance_vtable().get_full_method(disp_id).unwrap();
                 let callee = FunctionObject::from_method(
                     activation,
                     method,
                     scope.expect("Scope should exist here"),
                     Some(receiver),
-                    class,
+                    class_obj,
                 );
 
                 // We call getters, but return the actual function object for normal methods
@@ -699,12 +604,13 @@ impl<'gc> ClassObject<'gc> {
             }) => {
                 // todo: handle errors
                 let ClassBoundMethod {
-                    class,
+                    class_obj,
                     scope,
                     method,
+                    ..
                 } = self.instance_vtable().get_full_method(disp_id).unwrap();
                 let callee =
-                    FunctionObject::from_method(activation, method, scope.expect("Scope should exist here"), Some(receiver), class);
+                    FunctionObject::from_method(activation, method, scope.expect("Scope should exist here"), Some(receiver), class_obj);
 
                 callee.call(receiver.into(), &[value], activation)?;
                 Ok(())
@@ -722,14 +628,48 @@ impl<'gc> ClassObject<'gc> {
     pub fn add_application(
         &self,
         gc_context: &Mutation<'gc>,
-        param: Option<ClassObject<'gc>>,
+        param: Option<Class<'gc>>,
         cls: ClassObject<'gc>,
     ) {
         self.0.write(gc_context).applications.insert(param, cls);
     }
 
+    /// Parametrize this class. This does not check to ensure that this class is generic.
+    pub fn parametrize(
+        &self,
+        activation: &mut Activation<'_, 'gc>,
+        class_param: Option<Class<'gc>>,
+    ) -> Result<ClassObject<'gc>, Error<'gc>> {
+        let self_class = self.inner_class_definition();
+
+        if let Some(application) = self.0.read().applications.get(&class_param) {
+            return Ok(*application);
+        }
+
+        // if it's not a known application, then it's not int/uint/Number/*,
+        // so it must be a simple Vector.<*>-derived class.
+
+        let parameterized_class =
+            Class::with_type_param(&mut activation.context, self_class, class_param);
+
+        // NOTE: this isn't fully accurate, but much simpler.
+        // FP's Vector is more of special case that literally copies some parent class's properties
+        // main example: Vector.<Object>.prototype === Vector.<*>.prototype
+
+        let vector_star_cls = activation.avm2().classes().object_vector;
+        let class_object =
+            Self::from_class(activation, parameterized_class, Some(vector_star_cls))?;
+
+        self.0
+            .write(activation.context.gc_context)
+            .applications
+            .insert(class_param, class_object);
+
+        Ok(class_object)
+    }
+
     pub fn translation_unit(self) -> Option<TranslationUnit<'gc>> {
-        if let Method::Bytecode(bc) = self.0.read().constructor {
+        if let Method::Bytecode(bc) = self.constructor() {
             Some(bc.txunit)
         } else {
             None
@@ -737,7 +677,15 @@ impl<'gc> ClassObject<'gc> {
     }
 
     pub fn constructor(self) -> Method<'gc> {
-        self.0.read().constructor
+        self.inner_class_definition().instance_init()
+    }
+
+    pub fn native_constructor(self) -> Method<'gc> {
+        self.inner_class_definition().native_instance_init()
+    }
+
+    pub fn call_handler(self) -> Option<Method<'gc>> {
+        self.inner_class_definition().call_handler()
     }
 
     pub fn instance_vtable(self) -> VTable<'gc> {
@@ -765,10 +713,6 @@ impl<'gc> ClassObject<'gc> {
         self.0.read().prototype.unwrap()
     }
 
-    pub fn interfaces(self) -> Vec<Class<'gc>> {
-        self.0.read().interfaces.clone()
-    }
-
     pub fn class_scope(self) -> ScopeChain<'gc> {
         self.0.read().class_scope
     }
@@ -779,14 +723,6 @@ impl<'gc> ClassObject<'gc> {
 
     pub fn superclass_object(self) -> Option<ClassObject<'gc>> {
         self.0.read().superclass_object
-    }
-
-    pub fn set_param(self, gc_context: &Mutation<'gc>, param: Option<Option<ClassObject<'gc>>>) {
-        self.0.write(gc_context).params = param;
-    }
-
-    pub fn as_class_params(self) -> Option<Option<ClassObject<'gc>>> {
-        self.0.read().params
     }
 
     fn instance_allocator(self) -> Option<AllocatorFn> {
@@ -846,16 +782,16 @@ impl<'gc> TObject<'gc> for ClassObject<'gc> {
 
     fn call(
         self,
-        receiver: Value<'gc>,
+        _receiver: Value<'gc>,
         arguments: &[Value<'gc>],
         activation: &mut Activation<'_, 'gc>,
     ) -> Result<Value<'gc>, Error<'gc>> {
-        if let Some(call_handler) = self.0.read().call_handler {
+        if let Some(call_handler) = self.call_handler() {
             let scope = self.0.read().class_scope;
             exec(
                 call_handler,
                 scope,
-                receiver.coerce_to_object(activation)?,
+                self.into(),
                 Some(self),
                 arguments,
                 activation,
@@ -947,7 +883,7 @@ impl<'gc> TObject<'gc> for ClassObject<'gc> {
             Value::Null => None,
             v => Some(v),
         };
-        let object_param = match object_param {
+        let class_param = match object_param {
             None => None,
             Some(cls) => Some(
                 cls.as_object()
@@ -958,38 +894,12 @@ impl<'gc> TObject<'gc> for ClassObject<'gc> {
                             "Cannot apply class {:?} with non-class parameter",
                             self_class.name()
                         )
-                    })?,
+                    })?
+                    .inner_class_definition(),
             ),
         };
 
-        if let Some(application) = self.0.read().applications.get(&object_param) {
-            return Ok(*application);
-        }
-
-        // if it's not a known application, then it's not int/uint/Number/*,
-        // so it must be a simple Vector.<*>-derived class.
-
-        let class_param = object_param.map(|c| c.inner_class_definition());
-
-        let parameterized_class =
-            Class::with_type_param(&mut activation.context, self_class, class_param);
-
-        // NOTE: this isn't fully accurate, but much simpler.
-        // FP's Vector is more of special case that literally copies some parent class's properties
-        // main example: Vector.<Object>.prototype === Vector.<*>.prototype
-
-        let vector_star_cls = activation.avm2().classes().object_vector;
-        let class_object =
-            Self::from_class(activation, parameterized_class, Some(vector_star_cls))?;
-
-        class_object.0.write(activation.context.gc_context).params = Some(object_param);
-
-        self.0
-            .write(activation.context.gc_context)
-            .applications
-            .insert(object_param, class_object);
-
-        Ok(class_object)
+        self.parametrize(activation, class_param)
     }
 }
 

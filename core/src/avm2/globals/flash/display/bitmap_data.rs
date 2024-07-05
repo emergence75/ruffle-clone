@@ -2,7 +2,9 @@
 
 use crate::avm2::activation::Activation;
 use crate::avm2::bytearray::ByteArrayStorage;
-use crate::avm2::error::{argument_error, make_error_2007, make_error_2008, range_error};
+use crate::avm2::error::{
+    argument_error, make_error_2004, make_error_2007, make_error_2008, range_error, Error2004Type,
+};
 use crate::avm2::filters::FilterAvm2Ext;
 pub use crate::avm2::object::bitmap_data_allocator;
 use crate::avm2::object::{BitmapDataObject, ByteArrayObject, Object, TObject, VectorObject};
@@ -92,7 +94,7 @@ pub fn init<'gc>(
 ) -> Result<Value<'gc>, Error<'gc>> {
     // We set the underlying BitmapData instance - we start out with a dummy BitmapDataWrapper,
     // which makes custom classes see a disposed BitmapData before they call super()
-    let name = this.instance_of_class_definition().map(|c| c.name());
+    let name = this.instance_class().map(|c| c.name());
     let character = this
         .instance_of()
         .and_then(|t| {
@@ -374,7 +376,7 @@ pub fn get_vector<'gc>(
             height,
         );
 
-        let value_type = activation.avm2().classes().uint;
+        let value_type = activation.avm2().classes().uint.inner_class_definition();
         let new_storage = VectorStorage::from_values(pixels, false, Some(value_type));
 
         return Ok(VectorObject::from_vector(new_storage, activation)?.into());
@@ -1025,13 +1027,7 @@ pub fn draw_with_quality<'gc>(
         let quality = if let Some(quality) = args.try_get_string(activation, 6)? {
             match quality.parse() {
                 Ok(quality) => quality,
-                Err(_) => {
-                    return Err(Error::AvmError(argument_error(
-                        activation,
-                        "Error #2004: One of the parameters is invalid.",
-                        2004,
-                    )?));
-                }
+                Err(_) => return Err(make_error_2004(activation, Error2004Type::ArgumentError)),
             }
         } else {
             activation.context.stage.quality()

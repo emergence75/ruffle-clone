@@ -30,7 +30,8 @@ use crate::string::AvmString;
 use crate::tag_utils::SwfMovie;
 use crate::vminterface::Instantiator;
 use crate::{avm2_stub_method, avm2_stub_method_context};
-use encoding_rs::UTF_8;
+use chardetng::EncodingDetector;
+use encoding_rs::{UTF_8, WINDOWS_1252};
 use gc_arena::{Collect, GcCell};
 use indexmap::IndexMap;
 use ruffle_render::utils::{determine_jpeg_tag_format, JpegTagFormat};
@@ -144,14 +145,6 @@ impl ContentType {
             Err(Error::UnexpectedData(expected, self))
         }
     }
-}
-
-#[derive(Clone, Collect, Copy)]
-#[collect(no_drop)]
-pub enum DataFormat {
-    Binary,
-    Text,
-    Variables,
 }
 
 #[derive(Debug, Error)]
@@ -350,6 +343,65 @@ impl<'gc> LoadManager<'gc> {
         loader.movie_loader(player, request, loader_url)
     }
 
+    pub fn load_asset_movie(
+        player: Weak<Mutex<Player>>,
+        request: Request,
+        importer_movie: Arc<SwfMovie>,
+    ) -> OwnedFuture<(), Error> {
+        let player = player
+            .upgrade()
+            .expect("Could not upgrade weak reference to player");
+
+        Box::pin(async move {
+            let fetch = player.lock().unwrap().navigator().fetch(request);
+
+            match Loader::wait_for_full_response(fetch).await {
+                Ok((body, url, _status, _redirected)) => {
+                    let content_type = ContentType::sniff(&body);
+                    tracing::info!("Loading imported movie: {:?}", url);
+                    match content_type {
+                        ContentType::Swf => {
+                            let movie = SwfMovie::from_data(&body, url.clone(), Some(url.clone()))
+                                .expect("Could not load movie");
+
+                            let movie = Arc::new(movie);
+
+                            player.lock().unwrap().mutate_with_update_context(|uc| {
+                                let clip = MovieClip::new_import_assets(uc, movie, importer_movie);
+
+                                clip.set_cur_preload_frame(uc.gc_context, 0);
+                                let mut execution_limit = ExecutionLimit::none();
+
+                                tracing::debug!("Preloading swf to run exports {:?}", url);
+
+                                // Create library for exports before preloading
+                                uc.library.library_for_movie_mut(clip.movie());
+                                let res = clip.preload(uc, &mut execution_limit);
+                                tracing::debug!(
+                                    "Preloaded swf to run exports result {:?} {}",
+                                    url,
+                                    res
+                                );
+                            });
+                            Ok(())
+                        }
+                        _ => {
+                            tracing::warn!(
+                                "Unsupported content type for ImportAssets: {:?}",
+                                content_type
+                            );
+                            Ok(())
+                        }
+                    }
+                }
+                Err(e) => Err(Error::FetchError(format!(
+                    "Could not fetch: {:?} because {:?}",
+                    e.url, e.error
+                ))),
+            }
+        })
+    }
+
     /// Kick off a movie clip load.
     ///
     /// Returns the loader's async process, which you will need to spawn.
@@ -461,7 +513,6 @@ impl<'gc> LoadManager<'gc> {
         player: Weak<Mutex<Player>>,
         target_object: Avm2Object<'gc>,
         request: Request,
-        data_format: DataFormat,
     ) -> OwnedFuture<(), Error> {
         let loader = Loader::LoadURLLoader {
             self_handle: None,
@@ -469,7 +520,7 @@ impl<'gc> LoadManager<'gc> {
         };
         let handle = self.add_loader(loader);
         let loader = self.get_loader_mut(handle).unwrap();
-        loader.load_url_loader(player, request, data_format)
+        loader.load_url_loader(player, request)
     }
 
     /// Kick off an AVM1 audio load.
@@ -1225,6 +1276,7 @@ impl<'gc> Loader<'gc> {
             let fetch = player.lock().unwrap().navigator().fetch(request);
 
             let response = fetch.await.map_err(|e| e.error)?;
+            let response_encoding = response.text_encoding();
             let body = response.body().await?;
 
             // Fire the load handler.
@@ -1241,7 +1293,28 @@ impl<'gc> Loader<'gc> {
                     ActivationIdentifier::root("[Form Loader]"),
                 );
 
-                for (k, v) in form_urlencoded::parse(&body) {
+                let utf8_string;
+                let utf8_body = if activation.context.system.use_codepage {
+                    // Determine the encoding
+                    let encoding = if let Some(encoding) = response_encoding {
+                        encoding
+                    } else {
+                        let mut encoding_detector = EncodingDetector::new();
+                        encoding_detector.feed(&body, true);
+                        encoding_detector.guess(None, true)
+                    };
+
+                    // Convert the text into UTF-8
+                    utf8_string = encoding.decode(&body).0;
+                    utf8_string.as_bytes()
+                } else if activation.context.swf.version() <= 5 {
+                    utf8_string = WINDOWS_1252.decode(&body).0;
+                    utf8_string.as_bytes()
+                } else {
+                    &body
+                };
+
+                for (k, v) in form_urlencoded::parse(utf8_body) {
                     let k = AvmString::new_utf8(activation.context.gc_context, k);
                     let v = AvmString::new_utf8(activation.context.gc_context, v);
                     that.set(k, v.into(), &mut activation)?;
@@ -1445,7 +1518,6 @@ impl<'gc> Loader<'gc> {
         &mut self,
         player: Weak<Mutex<Player>>,
         request: Request,
-        data_format: DataFormat,
     ) -> OwnedFuture<(), Error> {
         let handle = match self {
             Loader::LoadURLLoader { self_handle, .. } => {
@@ -1476,24 +1548,25 @@ impl<'gc> Loader<'gc> {
                     body: Vec<u8>,
                     activation: &mut Avm2Activation<'a, 'gc>,
                     target: Avm2Object<'gc>,
-                    data_format: DataFormat,
                 ) {
-                    let data_object = match data_format {
-                        DataFormat::Binary => {
-                            let storage = ByteArrayStorage::from_vec(body);
-                            let bytearray =
-                                ByteArrayObject::from_storage(activation, storage).unwrap();
+                    let data_format = target
+                        .get_public_property("dataFormat", activation)
+                        .expect("The dataFormat field exists on URLLoaders")
+                        .coerce_to_string(activation)
+                        .expect("The dataFormat field is typed String");
 
-                            Some(bytearray.into())
-                        }
-                        DataFormat::Text => {
+                    let data_object = if &data_format == b"binary" {
+                        let storage = ByteArrayStorage::from_vec(body);
+                        let bytearray = ByteArrayObject::from_storage(activation, storage).unwrap();
+
+                        Some(bytearray.into())
+                    } else if &data_format == b"variables" {
+                        if body.is_empty() {
+                            None
+                        } else {
                             let string_value =
                                 AvmString::new_utf8_bytes(activation.context.gc_context, &body);
-                            Some(Avm2Value::String(string_value))
-                        }
-                        DataFormat::Variables => {
-                            let string_value =
-                                AvmString::new_utf8_bytes(activation.context.gc_context, &body);
+
                             activation
                                 .avm2()
                                 .classes()
@@ -1502,6 +1575,15 @@ impl<'gc> Loader<'gc> {
                                 .ok()
                                 .map(|o| o.into())
                         }
+                    } else {
+                        if &data_format != b"text" {
+                            tracing::warn!("Invalid URLLoaderDataFormat: {}", data_format);
+                        }
+
+                        let string_value =
+                            AvmString::new_utf8_bytes(activation.context.gc_context, &body);
+
+                        Some(Avm2Value::String(string_value))
                     };
 
                     if let Some(data_object) = data_object {
@@ -1527,7 +1609,7 @@ impl<'gc> Loader<'gc> {
                         let open_evt =
                             Avm2EventObject::bare_default_event(&mut activation.context, "open");
                         Avm2::dispatch_event(&mut activation.context, open_evt, target);
-                        set_data(body, &mut activation, target, data_format);
+                        set_data(body, &mut activation, target);
 
                         // FIXME - we should fire "progress" events as we receive data, not
                         // just at the end
@@ -1577,7 +1659,7 @@ impl<'gc> Loader<'gc> {
                         // Testing with Flash shoes that the 'data' property is cleared
                         // when an error occurs
 
-                        set_data(Vec::new(), &mut activation, target, data_format);
+                        set_data(Vec::new(), &mut activation, target);
 
                         let (status_code, redirected) =
                             if let Error::HttpNotOk(_, status_code, redirected, _) = response.error
