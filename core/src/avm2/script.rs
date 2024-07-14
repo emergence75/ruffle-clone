@@ -230,11 +230,15 @@ impl<'gc> TranslationUnit<'gc> {
 
         class.load_traits(activation, self, class_index)?;
 
-        class.init_vtable(&mut activation.context)?;
-        class
+        let c_class = class
             .c_class()
-            .expect("Class::from_abc_index returns an i_class")
-            .init_vtable(&mut activation.context)?;
+            .expect("Class::from_abc_index returns an i_class");
+
+        class.init_vtable(&mut activation.context)?;
+        c_class.init_vtable(&mut activation.context)?;
+
+        class.validate_class(activation)?;
+        c_class.validate_class(activation)?;
 
         Ok(class)
     }

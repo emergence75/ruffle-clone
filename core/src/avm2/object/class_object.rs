@@ -194,8 +194,6 @@ impl<'gc> ClassObject<'gc> {
     fn init_instance_vtable(self, activation: &mut Activation<'_, 'gc>) -> Result<(), Error<'gc>> {
         let class = self.inner_class_definition();
 
-        class.validate_class()?;
-
         self.instance_vtable().init_vtable(
             class,
             Some(self),
