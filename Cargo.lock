@@ -4579,6 +4579,7 @@ version = "0.1.0"
 dependencies = [
  "bzip2",
  "hex",
+ "js-sys",
  "libloading",
  "reqwest",
  "ruffle_render",
@@ -4590,6 +4591,8 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tracing",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]
