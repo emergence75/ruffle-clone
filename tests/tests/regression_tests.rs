@@ -2,6 +2,7 @@
 //!
 //! Trace output can be compared with correct output from the official Flash Player.
 
+use std::fs::OpenOptions;
 use crate::environment::NativeEnvironment;
 use crate::external_interface::tests::{external_interface_avm1, external_interface_avm2};
 use crate::shared_object::{shared_object_avm1, shared_object_avm2, shared_object_self_ref_avm1};
@@ -15,7 +16,9 @@ use ruffle_test_framework::test::{Test, TestKind};
 use ruffle_test_framework::vfs::{PhysicalFS, VfsPath};
 use std::panic::{catch_unwind, resume_unwind, AssertUnwindSafe};
 use std::path::Path;
+use std::thread;
 use std::thread::sleep;
+use std::time::Instant;
 
 mod environment;
 mod external_interface;
@@ -169,6 +172,7 @@ fn run_test(args: &Arguments, file: &Path, name: &str) -> Trial {
     let kind = test.kind();
 
     let mut trial = Trial::test(test.name.to_string(), move || {
+        let start = Instant::now();
         let test = AssertUnwindSafe(test);
         let unwind_result = catch_unwind(|| {
             let mut runner = test.create_test_runner(&NativeEnvironment)?;
@@ -184,6 +188,17 @@ fn run_test(args: &Arguments, file: &Path, name: &str) -> Trial {
 
             Result::<_>::Ok(())
         });
+        let time = Instant::now() - start;
+
+        use std::io::Write;
+        let mut file = OpenOptions::new()
+            .write(true)
+            .append(true)
+            .create(true)
+            .open(format!("times-{:?}.log", thread::current().id()))
+            .unwrap();
+
+        let _ = writeln!(file, "{:.4} {}", time.as_secs_f64(), test.name.to_string());
         if test.options.known_failure {
             match unwind_result {
                 Ok(Ok(())) => Err(
