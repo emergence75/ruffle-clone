@@ -281,6 +281,12 @@ pub fn verify_method<'gc>(
                         return Err(make_error_1025(activation, object_register));
                     } else if index_register >= max_locals {
                         return Err(make_error_1025(activation, index_register));
+                    } else if index_register == object_register {
+                        return Err(Error::AvmError(verify_error(
+                            activation,
+                            "Error #1124: OP_hasnext2 requires object and index to be distinct registers.",
+                            1124,
+                        )?));
                     }
                 }
 
@@ -386,6 +392,19 @@ pub fn verify_method<'gc>(
                                 multiname.to_qualified_name(activation.context.gc_context),
                             )
                         })?;
+                }
+
+                AbcOp::GetSlot { index }
+                | AbcOp::SetSlot { index }
+                | AbcOp::GetGlobalSlot { index }
+                | AbcOp::SetGlobalSlot { index } => {
+                    if index == 0 {
+                        return Err(Error::AvmError(verify_error(
+                            activation,
+                            "Error #1026: Slot 0 exceeds slotCount",
+                            1026,
+                        )?));
+                    }
                 }
 
                 _ => {}
