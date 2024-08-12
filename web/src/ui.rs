@@ -292,6 +292,10 @@ impl UiBackend for WebUiBackend {
         self.js_player.open_virtual_keyboard()
     }
 
+    fn close_virtual_keyboard(&self) {
+        self.js_player.close_virtual_keyboard()
+    }
+
     fn language(&self) -> LanguageIdentifier {
         self.language.clone()
     }

@@ -1,17 +1,17 @@
 use crate::backends::DesktopUiBackend;
 use crate::custom_event::RuffleEvent;
 use crate::gui::movie::{MovieView, MovieViewRenderer};
+use crate::gui::theme::ThemeController;
 use crate::gui::{RuffleGui, MENU_HEIGHT};
 use crate::player::{LaunchOptions, PlayerController};
 use crate::preferences::GlobalPreferences;
 use anyhow::anyhow;
 use egui::{Context, ViewportId};
 use fontdb::{Database, Family, Query, Source};
-use ruffle_core::Player;
+use ruffle_core::{Player, PlayerEvent};
 use ruffle_render_wgpu::backend::{request_adapter_and_device, WgpuRenderBackend};
 use ruffle_render_wgpu::descriptors::Descriptors;
 use ruffle_render_wgpu::utils::{format_list, get_backend_names};
-use std::rc::Rc;
 use std::sync::{Arc, MutexGuard};
 use std::time::{Duration, Instant};
 use unic_langid::LanguageIdentifier;
@@ -29,7 +29,7 @@ pub struct GuiController {
     egui_winit: egui_winit::State,
     egui_renderer: egui_wgpu::Renderer,
     gui: RuffleGui,
-    window: Rc<Window>,
+    window: Arc<Window>,
     last_update: Instant,
     repaint_after: Duration,
     surface: wgpu::Surface<'static>,
@@ -40,11 +40,12 @@ pub struct GuiController {
     size: PhysicalSize<u32>,
     /// If this is set, we should not render the main menu.
     no_gui: bool,
+    theme_controller: ThemeController,
 }
 
 impl GuiController {
-    pub fn new(
-        window: Rc<Window>,
+    pub async fn new(
+        window: Arc<Window>,
         event_loop: &EventLoop<RuffleEvent>,
         preferences: GlobalPreferences,
         font_database: &Database,
@@ -90,12 +91,12 @@ impl GuiController {
                 view_formats: Default::default(),
             },
         );
+        let event_loop = event_loop.create_proxy();
         let descriptors = Descriptors::new(instance, adapter, device, queue);
         let egui_ctx = Context::default();
-        if let Some(Theme::Light) = window.theme() {
-            egui_ctx.set_visuals(egui::Visuals::light());
-        }
 
+        let theme_controller =
+            ThemeController::new(window.clone(), preferences.clone(), egui_ctx.clone()).await;
         let mut egui_winit =
             egui_winit::State::new(egui_ctx, ViewportId::ROOT, window.as_ref(), None, None);
         egui_winit.set_max_texture_side(descriptors.limits.max_texture_dimension_2d as usize);
@@ -107,8 +108,8 @@ impl GuiController {
             size.height,
             window.scale_factor(),
         ));
-        let egui_renderer = egui_wgpu::Renderer::new(&descriptors.device, surface_format, None, 1);
-        let event_loop = event_loop.create_proxy();
+        let egui_renderer =
+            egui_wgpu::Renderer::new(&descriptors.device, surface_format, None, 1, true);
         let descriptors = Arc::new(descriptors);
         let gui = RuffleGui::new(
             event_loop,
@@ -135,7 +136,12 @@ impl GuiController {
             movie_view_renderer,
             size,
             no_gui,
+            theme_controller,
         })
+    }
+
+    pub fn set_theme(&self, theme: Theme) {
+        self.theme_controller.set_theme(theme);
     }
 
     pub fn descriptors(&self) -> &Arc<Descriptors> {
@@ -178,11 +184,7 @@ impl GuiController {
         }
 
         if let WindowEvent::ThemeChanged(theme) = &event {
-            let visuals = match theme {
-                Theme::Dark => egui::Visuals::dark(),
-                Theme::Light => egui::Visuals::light(),
-            };
-            self.egui_winit.egui_ctx().set_visuals(visuals);
+            self.set_theme(*theme);
         }
 
         if matches!(
@@ -368,8 +370,12 @@ impl GuiController {
         surface_texture.present();
     }
 
-    pub fn show_context_menu(&mut self, menu: Vec<ruffle_core::ContextMenuItem>) {
-        self.gui.show_context_menu(menu);
+    pub fn show_context_menu(
+        &mut self,
+        menu: Vec<ruffle_core::ContextMenuItem>,
+        close_event: PlayerEvent,
+    ) {
+        self.gui.show_context_menu(menu, close_event);
     }
 
     pub fn is_context_menu_visible(&self) -> bool {

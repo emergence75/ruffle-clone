@@ -82,7 +82,7 @@ impl<'gc> Namespace<'gc> {
     pub fn from_abc_namespace(
         translation_unit: TranslationUnit<'gc>,
         namespace_index: Index<AbcNamespace>,
-        context: &mut UpdateContext<'_, 'gc>,
+        context: &mut UpdateContext<'gc>,
     ) -> Result<Self, Error<'gc>> {
         if namespace_index.0 == 0 {
             return Ok(Self::any(context.gc_context));
@@ -323,6 +323,12 @@ impl<'gc> Namespace<'gc> {
                 name_matches && version_matches
             }
             _ => false,
+        }
+    }
+    pub fn matches_api_version(&self, match_version: ApiVersion) -> bool {
+        match &*self.0 {
+            NamespaceData::Namespace(_, namespace_version) => namespace_version <= &match_version,
+            _ => true,
         }
     }
 }

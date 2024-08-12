@@ -15,7 +15,8 @@ use crate::tag_utils::SwfMovie;
 use crate::PlayerRuntime;
 
 use fnv::FnvHashMap;
-use gc_arena::{Collect, GcCell, Mutation};
+use gc_arena::lock::GcRefLock;
+use gc_arena::{Collect, Mutation};
 use std::sync::Arc;
 use swf::avm2::read::Reader;
 use swf::DoAbc2Flag;
@@ -81,8 +82,8 @@ pub use crate::avm2::globals::flash::ui::context_menu::make_context_menu_state;
 pub use crate::avm2::multiname::Multiname;
 pub use crate::avm2::namespace::Namespace;
 pub use crate::avm2::object::{
-    ArrayObject, BitmapDataObject, ClassObject, EventObject, Object, ScriptObject,
-    SoundChannelObject, StageObject, TObject,
+    ArrayObject, BitmapDataObject, ClassObject, EventObject, Object, SoundChannelObject,
+    StageObject, TObject,
 };
 pub use crate::avm2::qname::QName;
 pub use crate::avm2::value::Value;
@@ -112,7 +113,7 @@ pub struct Avm2<'gc> {
     scope_stack: Vec<Scope<'gc>>,
 
     /// The current call stack of the player.
-    call_stack: GcCell<'gc, CallStack<'gc>>,
+    call_stack: GcRefLock<'gc, CallStack<'gc>>,
 
     /// This domain is used exclusively for classes from playerglobals
     playerglobals_domain: Domain<'gc>,
@@ -216,7 +217,7 @@ impl<'gc> Avm2<'gc> {
             player_runtime,
             stack: Vec::new(),
             scope_stack: Vec::new(),
-            call_stack: GcCell::new(context.gc_context, CallStack::new()),
+            call_stack: GcRefLock::new(context.gc_context, CallStack::new().into()),
             playerglobals_domain,
             stage_domain,
             system_classes: None,
@@ -271,9 +272,9 @@ impl<'gc> Avm2<'gc> {
         }
     }
 
-    pub fn load_player_globals(context: &mut UpdateContext<'_, 'gc>) -> Result<(), Error<'gc>> {
+    pub fn load_player_globals(context: &mut UpdateContext<'gc>) -> Result<(), Error<'gc>> {
         let globals = context.avm2.playerglobals_domain;
-        let mut activation = Activation::from_domain(context.reborrow(), globals);
+        let mut activation = Activation::from_domain(context, globals);
         globals::load_player_globals(&mut activation, globals)
     }
 
@@ -309,9 +310,9 @@ impl<'gc> Avm2<'gc> {
     /// Run a script's initializer method.
     pub fn run_script_initializer(
         script: Script<'gc>,
-        context: &mut UpdateContext<'_, 'gc>,
+        context: &mut UpdateContext<'gc>,
     ) -> Result<(), Error<'gc>> {
-        let mut init_activation = Activation::from_script(context.reborrow(), script)?;
+        let mut init_activation = Activation::from_script(context, script)?;
 
         let (method, scope, _domain) = script.init();
         match method {
@@ -379,8 +380,8 @@ impl<'gc> Avm2<'gc> {
     }
 
     pub fn each_orphan_obj(
-        context: &mut UpdateContext<'_, 'gc>,
-        mut f: impl FnMut(DisplayObject<'gc>, &mut UpdateContext<'_, 'gc>),
+        context: &mut UpdateContext<'gc>,
+        mut f: impl FnMut(DisplayObject<'gc>, &mut UpdateContext<'gc>),
     ) {
         // Clone the Rc before iterating over it. Any modifications must go through
         // `Rc::make_mut` in `orphan_objects_mut`, which will leave this `Rc` unmodified.
@@ -398,7 +399,7 @@ impl<'gc> Avm2<'gc> {
     /// Called at the end of `run_all_phases_avm2` - removes any movies
     /// that have been garbage collected, or are no longer orphans
     /// (they've since acquired a parent).
-    pub fn cleanup_dead_orphans(context: &mut UpdateContext<'_, 'gc>) {
+    pub fn cleanup_dead_orphans(context: &mut UpdateContext<'gc>) {
         context.avm2.orphan_objects_mut().retain(|d| {
             if let Some(dobj) = valid_orphan(*d, context.gc_context) {
                 // All clips that become orphaned (have their parent removed, or start out with no parent)
@@ -431,33 +432,62 @@ impl<'gc> Avm2<'gc> {
     /// Dispatch an event on an object.
     ///
     /// This will become its own self-contained activation and swallow
-    /// any resulting resulting error (after logging).
+    /// any resulting error (after logging).
     ///
     /// Attempts to dispatch a non-event object will panic.
+    ///
+    /// Returns `true` if the event has been handled.
     pub fn dispatch_event(
-        context: &mut UpdateContext<'_, 'gc>,
+        context: &mut UpdateContext<'gc>,
         event: Object<'gc>,
         target: Object<'gc>,
-    ) {
+    ) -> bool {
+        Self::dispatch_event_internal(context, event, target, false)
+    }
+
+    /// Simulate dispatching an event.
+    ///
+    /// This method is similar to [`Self::dispatch_event`],
+    /// but it does not execute event handlers.
+    ///
+    /// Returns `true` when the event would have been handled if not simulated.
+    pub fn simulate_event_dispatch(
+        context: &mut UpdateContext<'gc>,
+        event: Object<'gc>,
+        target: Object<'gc>,
+    ) -> bool {
+        Self::dispatch_event_internal(context, event, target, true)
+    }
+
+    fn dispatch_event_internal(
+        context: &mut UpdateContext<'gc>,
+        event: Object<'gc>,
+        target: Object<'gc>,
+        simulate_dispatch: bool,
+    ) -> bool {
         let event_name = event
             .as_event()
             .map(|e| e.event_type())
             .unwrap_or_else(|| panic!("cannot dispatch non-event object: {:?}", event));
 
-        let mut activation = Activation::from_nothing(context.reborrow());
-        if let Err(err) = events::dispatch_event(&mut activation, target, event) {
-            tracing::error!(
-                "Encountered AVM2 error when dispatching `{}` event: {:?}",
-                event_name,
-                err,
-            );
-            // TODO: push the error onto `loaderInfo.uncaughtErrorEvents`
+        let mut activation = Activation::from_nothing(context);
+        match events::dispatch_event(&mut activation, target, event, simulate_dispatch) {
+            Err(err) => {
+                tracing::error!(
+                    "Encountered AVM2 error when dispatching `{}` event: {:?}",
+                    event_name,
+                    err,
+                );
+                // TODO: push the error onto `loaderInfo.uncaughtErrorEvents`
+                false
+            }
+            Ok(handled) => handled,
         }
     }
 
     /// Add an object to the broadcast list.
     ///
-    /// Each broadcastable event contains it's own broadcast list. You must
+    /// Each broadcastable event contains its own broadcast list. You must
     /// register all objects that have event handlers with that event's
     /// broadcast list by calling this function. Attempting to register a
     /// broadcast listener for a non-broadcast event will do nothing.
@@ -465,7 +495,7 @@ impl<'gc> Avm2<'gc> {
     /// Attempts to register the same listener for the same event will also do
     /// nothing.
     pub fn register_broadcast_listener(
-        context: &mut UpdateContext<'_, 'gc>,
+        context: &mut UpdateContext<'gc>,
         object: Object<'gc>,
         event_name: AvmString<'gc>,
     ) {
@@ -501,7 +531,7 @@ impl<'gc> Avm2<'gc> {
     ///
     /// Attempts to broadcast a non-event object will panic.
     pub fn broadcast_event(
-        context: &mut UpdateContext<'_, 'gc>,
+        context: &mut UpdateContext<'gc>,
         event: Object<'gc>,
         on_type: ClassObject<'gc>,
     ) {
@@ -534,10 +564,11 @@ impl<'gc> Avm2<'gc> {
                 .copied();
 
             if let Some(object) = object.and_then(|obj| obj.upgrade(context.gc_context)) {
-                let mut activation = Activation::from_nothing(context.reborrow());
+                let mut activation = Activation::from_nothing(context);
 
-                if object.is_of_type(on_type.inner_class_definition(), &mut activation.context) {
-                    if let Err(err) = events::dispatch_event(&mut activation, object, event) {
+                if object.is_of_type(on_type.inner_class_definition()) {
+                    if let Err(err) = events::dispatch_event(&mut activation, object, event, false)
+                    {
                         tracing::error!(
                             "Encountered AVM2 error when broadcasting `{}` event: {:?}",
                             event_name,
@@ -562,9 +593,9 @@ impl<'gc> Avm2<'gc> {
         receiver: Value<'gc>,
         args: &[Value<'gc>],
         domain: Domain<'gc>,
-        context: &mut UpdateContext<'_, 'gc>,
+        context: &mut UpdateContext<'gc>,
     ) -> Result<(), String> {
-        let mut evt_activation = Activation::from_domain(context.reborrow(), domain);
+        let mut evt_activation = Activation::from_domain(context, domain);
         callable
             .call(receiver, args, &mut evt_activation)
             .map_err(|e| format!("{e:?}"))?;
@@ -574,7 +605,7 @@ impl<'gc> Avm2<'gc> {
 
     /// Load an ABC file embedded in a `DoAbc` or `DoAbc2` tag.
     pub fn do_abc(
-        context: &mut UpdateContext<'_, 'gc>,
+        context: &mut UpdateContext<'gc>,
         data: &[u8],
         name: Option<AvmString<'gc>>,
         flags: DoAbc2Flag,
@@ -585,12 +616,12 @@ impl<'gc> Avm2<'gc> {
         let abc = match reader.read() {
             Ok(abc) => abc,
             Err(_) => {
-                let mut activation = Activation::from_nothing(context.reborrow());
+                let mut activation = Activation::from_nothing(context);
                 return Err(make_error_1107(&mut activation));
             }
         };
 
-        let mut activation = Activation::from_domain(context.reborrow(), domain);
+        let mut activation = Activation::from_domain(context, domain);
         // Make sure we have the correct domain for code that tries to access it
         // using `activation.domain()`
         activation.set_outer(ScopeChain::new(domain));
@@ -620,20 +651,20 @@ impl<'gc> Avm2<'gc> {
         method: Method<'gc>,
         superclass: Option<ClassObject<'gc>>,
     ) {
-        self.call_stack.write(mc).push(method, superclass)
+        self.call_stack.borrow_mut(mc).push(method, superclass)
     }
 
     /// Pushes script initializer (global init) on the call stack
     pub fn push_global_init(&self, mc: &Mutation<'gc>, script: Script<'gc>) {
-        self.call_stack.write(mc).push_global_init(script)
+        self.call_stack.borrow_mut(mc).push_global_init(script)
     }
 
     /// Pops an executable off the call stack
     pub fn pop_call(&self, mc: &Mutation<'gc>) -> Option<CallNode<'gc>> {
-        self.call_stack.write(mc).pop()
+        self.call_stack.borrow_mut(mc).pop()
     }
 
-    pub fn call_stack(&self) -> GcCell<'gc, CallStack<'gc>> {
+    pub fn call_stack(&self) -> GcRefLock<'gc, CallStack<'gc>> {
         self.call_stack
     }
 

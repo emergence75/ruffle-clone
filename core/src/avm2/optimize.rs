@@ -68,7 +68,7 @@ impl<'gc> OptValue<'gc> {
     pub fn of_type(class: Class<'gc>) -> Self {
         Self {
             class: Some(class),
-            vtable: Some(class.instance_vtable()),
+            vtable: Some(class.vtable()),
             ..Self::any()
         }
     }
@@ -99,7 +99,7 @@ impl<'gc> OptValue<'gc> {
             || self.class == Some(classes.uint.inner_class_definition())
             || self.class == Some(classes.number.inner_class_definition())
             || self.class == Some(classes.boolean.inner_class_definition())
-            || self.class == Some(classes.void.inner_class_definition())
+            || self.class == Some(classes.void_def)
     }
 
     pub fn merged_with(self, other: OptValue<'gc>) -> OptValue<'gc> {
@@ -243,7 +243,6 @@ pub fn optimize<'gc>(
         pub uint: Class<'gc>,
         pub number: Class<'gc>,
         pub boolean: Class<'gc>,
-        pub class: Class<'gc>,
         pub string: Class<'gc>,
         pub array: Class<'gc>,
         pub function: Class<'gc>,
@@ -256,7 +255,6 @@ pub fn optimize<'gc>(
         uint: activation.avm2().classes().uint.inner_class_definition(),
         number: activation.avm2().classes().number.inner_class_definition(),
         boolean: activation.avm2().classes().boolean.inner_class_definition(),
-        class: activation.avm2().classes().class.inner_class_definition(),
         string: activation.avm2().classes().string.inner_class_definition(),
         array: activation.avm2().classes().array.inner_class_definition(),
         function: activation
@@ -264,7 +262,7 @@ pub fn optimize<'gc>(
             .classes()
             .function
             .inner_class_definition(),
-        void: activation.avm2().classes().void.inner_class_definition(),
+        void: activation.avm2().classes().void_def,
         namespace: activation
             .avm2()
             .classes()
@@ -280,33 +278,30 @@ pub fn optimize<'gc>(
     // but this works since it's guaranteed to be set in `Activation::from_method`.
     let this_value = activation.local_register(0);
 
-    let (this_class, this_vtable) = if let Some(this_class) = activation.subclass_object() {
+    let this_class = if let Some(this_class) = activation.subclass_object() {
         if this_value.is_of_type(activation, this_class.inner_class_definition()) {
-            (
-                Some(this_class),
-                Some(this_class.inner_class_definition().instance_vtable()),
-            )
-        } else if this_value
-            .as_object()
-            .and_then(|o| o.as_class_object())
-            .map(|c| c.inner_class_definition() == this_class.inner_class_definition())
-            .unwrap_or(false)
-        {
-            // Static method
-            (
-                Some(activation.avm2().classes().class),
-                Some(this_class.class_vtable()),
-            )
+            Some(this_class.inner_class_definition())
+        } else if let Some(this_object) = this_value.as_object() {
+            if this_object
+                .as_class_object()
+                .map(|c| c.inner_class_definition() == this_class.inner_class_definition())
+                .unwrap_or(false)
+            {
+                // Static method
+                Some(this_object.instance_class())
+            } else {
+                None
+            }
         } else {
-            (None, None)
+            None
         }
     } else {
-        (None, None)
+        None
     };
 
     let this_value = OptValue {
-        class: this_class.map(|c| c.inner_class_definition()),
-        vtable: this_vtable,
+        class: this_class,
+        vtable: this_class.map(|cls| cls.vtable()),
         contains_valid_integer: false,
         contains_valid_unsigned: false,
         null_state: NullState::NotNull,
@@ -691,9 +686,11 @@ pub fn optimize<'gc>(
             Op::NewFunction { .. } => {
                 stack.push_class_not_null(types.function);
             }
-            Op::NewClass { .. } => {
+            Op::NewClass { class } => {
+                let c_class = class.c_class().expect("NewClass holds an i_class");
+
                 stack.pop();
-                stack.push_class_not_null(types.class);
+                stack.push_class_not_null(c_class);
             }
             Op::NewCatch { .. } => {
                 // Avoid handling for now
@@ -746,9 +743,26 @@ pub fn optimize<'gc>(
                 stack.push_any();
             }
             Op::AsTypeLate => {
+                let type_c_class = stack.pop_or_any();
                 stack.pop();
-                stack.pop();
-                stack.push_any();
+
+                let mut new_value = OptValue::any();
+
+                if let Some(class) = type_c_class.class.and_then(|c| c.i_class()) {
+                    let class_is_primitive = class == types.int
+                        || class == types.uint
+                        || class == types.number
+                        || class == types.boolean
+                        || class == types.void;
+
+                    if !class_is_primitive {
+                        // If the type on the stack was a c_class with a non-primitive
+                        // i_class, we can use the type
+                        new_value = OptValue::of_type(class);
+                    }
+                }
+
+                stack.push(new_value);
             }
             Op::AsType { class } => {
                 let stack_value = stack.pop_or_any();
@@ -861,7 +875,7 @@ pub fn optimize<'gc>(
                 if !multiname.has_lazy_component() && has_simple_scoping {
                     let outer_scope = activation.outer();
                     if !outer_scope.is_empty() {
-                        if let Some(this_vtable) = this_vtable {
+                        if let Some(this_vtable) = this_class.map(|cls| cls.vtable()) {
                             if this_vtable.has_trait(&multiname) {
                                 *op = Op::GetScopeObject { index: 0 };
 
@@ -880,11 +894,7 @@ pub fn optimize<'gc>(
                                 *op = Op::GetOuterScope { index };
 
                                 stack_push_done = true;
-                                if let Some(class) = class {
-                                    stack.push_class(class);
-                                } else {
-                                    stack.push_any();
-                                }
+                                stack.push_class(class);
                             } else {
                                 // If `get_entry_for_multiname` returned `Some(None)`, there was
                                 // a `with` scope in the outer ScopeChain- abort optimization.
@@ -1151,16 +1161,40 @@ pub fn optimize<'gc>(
                 multiname,
                 num_args,
             } => {
+                let mut stack_push_done = false;
+
                 // Arguments
                 stack.popn(*num_args);
 
                 stack.pop_for_multiname(*multiname);
 
                 // Then receiver.
-                stack.pop();
+                let stack_value = stack.pop_or_any();
 
-                // Avoid checking return value for now
-                stack.push_any();
+                if !multiname.has_lazy_component() {
+                    if let Some(vtable) = stack_value.vtable() {
+                        match vtable.get_trait(multiname) {
+                            Some(Property::Slot { slot_id })
+                            | Some(Property::ConstSlot { slot_id }) => {
+                                let mut value_class = vtable.slot_classes()[slot_id as usize];
+                                let resolved_value_class = value_class.get_class(activation);
+
+                                if let Ok(Some(slot_class)) = resolved_value_class {
+                                    if let Some(instance_class) = slot_class.i_class() {
+                                        // ConstructProp on a c_class will construct its i_class
+                                        stack_push_done = true;
+                                        stack.push_class(instance_class);
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+
+                if !stack_push_done {
+                    stack.push_any();
+                }
             }
             Op::Call { num_args } => {
                 // Arguments
@@ -1202,6 +1236,8 @@ pub fn optimize<'gc>(
                 multiname,
                 num_args,
             } => {
+                let mut stack_push_done = false;
+
                 // Arguments
                 stack.popn(*num_args);
 
@@ -1220,6 +1256,46 @@ pub fn optimize<'gc>(
                                     push_return_value: true,
                                 };
                             }
+                            Some(Property::Slot { slot_id })
+                            | Some(Property::ConstSlot { slot_id }) => {
+                                if stack_value.not_null(activation) {
+                                    if *num_args == 1 {
+                                        let mut value_class =
+                                            vtable.slot_classes()[slot_id as usize];
+                                        let resolved_value_class =
+                                            value_class.get_class(activation);
+
+                                        if let Ok(Some(slot_class)) = resolved_value_class {
+                                            if let Some(called_class) = slot_class.i_class() {
+                                                // Calling a c_class will perform a simple coercion to the class
+                                                if called_class.call_handler().is_none() {
+                                                    *op = Op::CoerceSwapPop {
+                                                        class: called_class,
+                                                    };
+
+                                                    stack_push_done = true;
+                                                    stack.push_class(called_class);
+                                                } else if called_class == types.int {
+                                                    *op = Op::CoerceISwapPop;
+
+                                                    stack_push_done = true;
+                                                    stack.push_class(types.int);
+                                                } else if called_class == types.uint {
+                                                    *op = Op::CoerceUSwapPop;
+
+                                                    stack_push_done = true;
+                                                    stack.push_class(types.uint);
+                                                } else if called_class == types.number {
+                                                    *op = Op::CoerceDSwapPop;
+
+                                                    stack_push_done = true;
+                                                    stack.push_class(types.number);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
                             _ => {}
                         }
                     }
@@ -1227,7 +1303,9 @@ pub fn optimize<'gc>(
                 // `stack_pop_multiname` handled lazy
 
                 // Avoid checking return value for now
-                stack.push_any();
+                if !stack_push_done {
+                    stack.push_any();
+                }
             }
             Op::CallPropVoid {
                 multiname,
@@ -1262,6 +1340,9 @@ pub fn optimize<'gc>(
 
                 // Receiver
                 stack.pop();
+
+                // Avoid checking return value for now
+                stack.push_any();
             }
             Op::SetSuper { multiname } => {
                 stack.pop();
@@ -1306,11 +1387,7 @@ pub fn optimize<'gc>(
                     let global_scope = outer_scope.get_unchecked(0);
 
                     stack_push_done = true;
-                    if let Some(class) = global_scope.values().instance_class() {
-                        stack.push_class(class);
-                    } else {
-                        stack.push_any();
-                    }
+                    stack.push_class(global_scope.values().instance_class());
                 }
 
                 if !stack_push_done {
@@ -1324,26 +1401,24 @@ pub fn optimize<'gc>(
                 if !outer_scope.is_empty() {
                     let global_scope = outer_scope.get_unchecked(0);
 
-                    if let Some(class) = global_scope.values().instance_class() {
-                        let mut value_class =
-                            class.instance_vtable().slot_classes()[*slot_id as usize];
-                        let resolved_value_class = value_class.get_class(activation);
-                        if let Ok(class) = resolved_value_class {
-                            stack_push_done = true;
+                    let class = global_scope.values().instance_class();
+                    let mut value_class = class.vtable().slot_classes()[*slot_id as usize];
+                    let resolved_value_class = value_class.get_class(activation);
+                    if let Ok(class) = resolved_value_class {
+                        stack_push_done = true;
 
-                            if let Some(class) = class {
-                                stack.push_class(class);
-                            } else {
-                                stack.push_any();
-                            }
+                        if let Some(class) = class {
+                            stack.push_class(class);
+                        } else {
+                            stack.push_any();
                         }
-
-                        class.instance_vtable().set_slot_class(
-                            activation.context.gc_context,
-                            *slot_id as usize,
-                            value_class,
-                        );
                     }
+
+                    class.vtable().set_slot_class(
+                        activation.context.gc_context,
+                        *slot_id as usize,
+                        value_class,
+                    );
                 }
 
                 if !stack_push_done {

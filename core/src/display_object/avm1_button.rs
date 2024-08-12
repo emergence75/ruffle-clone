@@ -1,4 +1,6 @@
+use super::interactive::Avm2MousePick;
 use crate::avm1::{Activation, ActivationIdentifier, Object, StageObject, TObject, Value};
+use crate::backend::audio::AudioManager;
 use crate::backend::ui::MouseCursor;
 use crate::context::{ActionType, RenderContext, UpdateContext};
 use crate::display_object::container::{
@@ -21,8 +23,6 @@ use std::cell::{Cell, Ref, RefCell, RefMut};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use swf::ButtonActionCondition;
-
-use super::interactive::Avm2MousePick;
 
 #[derive(Clone, Collect, Copy)]
 #[collect(no_drop)]
@@ -129,7 +129,7 @@ impl<'gc> Avm1Button<'gc> {
     ///
     /// This function instantiates children and thus must not be called whilst
     /// the caller is holding a write lock on the button data.
-    pub fn set_state(mut self, context: &mut UpdateContext<'_, 'gc>, state: ButtonState) {
+    pub fn set_state(mut self, context: &mut UpdateContext<'gc>, state: ButtonState) {
         let mut removed_depths: fnv::FnvHashSet<_> =
             self.iter_render_list().map(|o| o.depth()).collect();
 
@@ -208,13 +208,13 @@ impl<'gc> Avm1Button<'gc> {
 
     fn get_boolean_property(
         self,
-        context: &mut UpdateContext<'_, 'gc>,
+        context: &mut UpdateContext<'gc>,
         name: &'static str,
         default: bool,
     ) -> bool {
         if let Value::Object(object) = self.object() {
             let mut activation = Activation::from_nothing(
-                context.reborrow(),
+                context,
                 ActivationIdentifier::root("[AVM1 Boolean Property]"),
                 self.avm1_root(),
             );
@@ -231,11 +231,11 @@ impl<'gc> Avm1Button<'gc> {
         }
     }
 
-    fn enabled(self, context: &mut UpdateContext<'_, 'gc>) -> bool {
+    fn enabled(self, context: &mut UpdateContext<'gc>) -> bool {
         self.get_boolean_property(context, "enabled", true)
     }
 
-    fn use_hand_cursor(self, context: &mut UpdateContext<'_, 'gc>) -> bool {
+    fn use_hand_cursor(self, context: &mut UpdateContext<'gc>) -> bool {
         self.get_boolean_property(context, "useHandCursor", true)
     }
 }
@@ -269,7 +269,7 @@ impl<'gc> TDisplayObject<'gc> for Avm1Button<'gc> {
 
     fn post_instantiation(
         &self,
-        context: &mut UpdateContext<'_, 'gc>,
+        context: &mut UpdateContext<'gc>,
         _init_object: Option<Object<'gc>>,
         _instantiated_by: Instantiator,
         run_frame: bool,
@@ -297,7 +297,7 @@ impl<'gc> TDisplayObject<'gc> for Avm1Button<'gc> {
         }
     }
 
-    fn run_frame_avm1(&self, context: &mut UpdateContext<'_, 'gc>) {
+    fn run_frame_avm1(&self, context: &mut UpdateContext<'gc>) {
         let self_display_object = (*self).into();
         let initialized = self.0.initialized.get();
 
@@ -355,7 +355,7 @@ impl<'gc> TDisplayObject<'gc> for Avm1Button<'gc> {
 
     fn hit_test_shape(
         &self,
-        context: &mut UpdateContext<'_, 'gc>,
+        context: &mut UpdateContext<'gc>,
         point: Point<Twips>,
         options: HitTestOptions,
     ) -> bool {
@@ -392,13 +392,16 @@ impl<'gc> TDisplayObject<'gc> for Avm1Button<'gc> {
         !self.is_empty()
     }
 
-    fn avm1_unload(&self, context: &mut UpdateContext<'_, 'gc>) {
+    fn avm1_unload(&self, context: &mut UpdateContext<'gc>) {
         self.drop_focus(context);
         if let Some(node) = self.maskee() {
             node.set_masker(context.gc(), None, true);
         } else if let Some(node) = self.masker() {
             node.set_maskee(context.gc(), None, true);
         }
+        context
+            .audio_manager
+            .stop_sounds_with_display_object(context.audio, (*self).into());
         self.set_avm1_removed(context.gc(), true);
     }
 }
@@ -430,7 +433,7 @@ impl<'gc> TInteractiveObject<'gc> for Avm1Button<'gc> {
 
     fn filter_clip_event(
         self,
-        _context: &mut UpdateContext<'_, 'gc>,
+        _context: &mut UpdateContext<'gc>,
         event: ClipEvent,
     ) -> ClipEventResult {
         // An invisible button can still run its `rollOut` or `releaseOutside` event.
@@ -454,11 +457,7 @@ impl<'gc> TInteractiveObject<'gc> for Avm1Button<'gc> {
         ClipEventResult::Handled
     }
 
-    fn event_dispatch(
-        self,
-        context: &mut UpdateContext<'_, 'gc>,
-        event: ClipEvent,
-    ) -> ClipEventResult {
+    fn event_dispatch(self, context: &mut UpdateContext<'gc>, event: ClipEvent) -> ClipEventResult {
         let self_display_object = self.into();
         let is_enabled = self.enabled(context);
 
@@ -476,12 +475,12 @@ impl<'gc> TInteractiveObject<'gc> for Avm1Button<'gc> {
                 Some(ButtonActionCondition::OUT_DOWN_TO_OVER_DOWN),
                 None,
             ),
-            ClipEvent::Press => (
+            ClipEvent::Press { .. } => (
                 ButtonState::Down,
                 Some(ButtonActionCondition::OVER_UP_TO_OVER_DOWN),
                 static_data.over_to_down_sound.as_ref(),
             ),
-            ClipEvent::Release => (
+            ClipEvent::Release { .. } => (
                 ButtonState::Over,
                 Some(ButtonActionCondition::OVER_DOWN_TO_OVER_UP),
                 static_data.down_to_over_sound.as_ref(),
@@ -517,7 +516,9 @@ impl<'gc> TInteractiveObject<'gc> for Avm1Button<'gc> {
             if let Some(condition) = condition {
                 self.0.run_actions(context, condition);
             }
-            self.0.play_sound(context, sound);
+            if let Some((id, sound_info)) = sound {
+                AudioManager::perform_sound_event(self.into(), context, *id, sound_info);
+            }
 
             // Queue ActionScript-defined event handlers after the SWF defined ones.
             // (e.g., clip.onRelease = foo).
@@ -558,7 +559,7 @@ impl<'gc> TInteractiveObject<'gc> for Avm1Button<'gc> {
 
     fn mouse_pick_avm1(
         &self,
-        context: &mut UpdateContext<'_, 'gc>,
+        context: &mut UpdateContext<'gc>,
         point: Point<Twips>,
         require_button_mode: bool,
     ) -> Option<InteractiveObject<'gc>> {
@@ -584,14 +585,14 @@ impl<'gc> TInteractiveObject<'gc> for Avm1Button<'gc> {
 
     fn mouse_pick_avm2(
         &self,
-        _context: &mut UpdateContext<'_, 'gc>,
+        _context: &mut UpdateContext<'gc>,
         _point: Point<Twips>,
         _require_button_mode: bool,
     ) -> Avm2MousePick<'gc> {
         Avm2MousePick::Miss
     }
 
-    fn mouse_cursor(self, context: &mut UpdateContext<'_, 'gc>) -> MouseCursor {
+    fn mouse_cursor(self, context: &mut UpdateContext<'gc>) -> MouseCursor {
         if self.use_hand_cursor(context) && self.enabled(context) {
             MouseCursor::Hand
         } else {
@@ -599,7 +600,7 @@ impl<'gc> TInteractiveObject<'gc> for Avm1Button<'gc> {
         }
     }
 
-    fn tab_enabled_default(&self, _context: &mut UpdateContext<'_, 'gc>) -> bool {
+    fn tab_enabled_default(&self, _context: &mut UpdateContext<'gc>) -> bool {
         true
     }
 
@@ -614,21 +615,9 @@ impl<'gc> TInteractiveObject<'gc> for Avm1Button<'gc> {
 }
 
 impl<'gc> Avm1ButtonData<'gc> {
-    fn play_sound(&self, context: &mut UpdateContext<'_, 'gc>, sound: Option<&swf::ButtonSound>) {
-        if let Some((id, sound_info)) = sound {
-            if let Some(sound_handle) = context
-                .library
-                .library_for_movie_mut(self.movie())
-                .get_sound(*id)
-            {
-                let _ = context.start_sound(sound_handle, sound_info, None, None);
-            }
-        }
-    }
-
     fn run_actions(
         &self,
-        context: &mut UpdateContext<'_, 'gc>,
+        context: &mut UpdateContext<'gc>,
         condition: ButtonActionCondition,
     ) -> ClipEventResult {
         let mut handled = ClipEventResult::NotHandled;

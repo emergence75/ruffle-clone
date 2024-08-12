@@ -47,7 +47,7 @@ async function queryTabStatus(
                 `Got ${tabs.length} tabs in response to active tab query.`,
             );
         }
-    } catch (e) {
+    } catch (_e) {
         listener("status_tabs_error");
         return;
     }
@@ -72,7 +72,7 @@ async function queryTabStatus(
         response = await utils.tabs.sendMessage(activeTab.id!, {
             type: "ping",
         });
-    } catch (e) {
+    } catch (_e) {
         // Try again after 0.2 seconds, Firefox takes some time to grant temporary
         // host permissions when the <all_urls> permission has not been granted.
         await new Promise((resolve) => setTimeout(resolve, 200));
@@ -80,7 +80,7 @@ async function queryTabStatus(
             response = await utils.tabs.sendMessage(activeTab.id!, {
                 type: "ping",
             });
-        } catch (e) {
+        } catch (_e) {
             listener("status_result_protected");
             reloadButton.disabled = true;
             return;
@@ -142,8 +142,9 @@ function optionsChanged() {
         return;
     }
 
-    const isDifferent = !deepEqual(savedOptions, tabOptions);
-    reloadButton.disabled = !isDifferent;
+    const showReloadButton = tabOptions.showReloadButton;
+    const notDifferent = deepEqual(savedOptions, tabOptions);
+    reloadButton.disabled = notDifferent && !showReloadButton;
 }
 
 async function displayTabStatus() {
@@ -154,6 +155,14 @@ async function displayTabStatus() {
 }
 
 window.addEventListener("DOMContentLoaded", async () => {
+    const data = await utils.storage.sync.get({
+        responseHeadersUnsupported: false,
+    });
+    if (data["responseHeadersUnsupported"]) {
+        document
+            .getElementById("swf_takeover")!
+            .parentElement!.classList.add("hidden");
+    }
     bindOptions((options) => {
         savedOptions = options;
         optionsChanged();

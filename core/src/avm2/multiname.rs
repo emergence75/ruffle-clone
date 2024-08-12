@@ -143,7 +143,7 @@ impl<'gc> Multiname<'gc> {
     pub fn abc_namespace_set(
         translation_unit: TranslationUnit<'gc>,
         namespace_set_index: Index<AbcNamespaceSet>,
-        context: &mut UpdateContext<'_, 'gc>,
+        context: &mut UpdateContext<'gc>,
     ) -> Result<NamespaceSet<'gc>, Error<'gc>> {
         if namespace_set_index.0 == 0 {
             return Err(Error::RustError(
@@ -178,7 +178,7 @@ impl<'gc> Multiname<'gc> {
     pub fn from_abc_index(
         translation_unit: TranslationUnit<'gc>,
         multiname_index: Index<AbcMultiname>,
-        context: &mut UpdateContext<'_, 'gc>,
+        context: &mut UpdateContext<'gc>,
     ) -> Result<Self, Error<'gc>> {
         let mc = context.gc_context;
         let abc = translation_unit.abc();
@@ -297,7 +297,7 @@ impl<'gc> Multiname<'gc> {
         let ns = if self.has_lazy_ns() {
             let ns_value = activation.pop_stack();
             let ns = ns_value.as_namespace()?;
-            NamespaceSet::single(*ns)
+            NamespaceSet::single(ns)
         } else {
             self.ns
         };

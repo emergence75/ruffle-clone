@@ -1,12 +1,10 @@
 package flash.display {
+    import __ruffle__.stub_method;
     import __ruffle__.stub_getter;
     import __ruffle__.stub_setter;
     import flash.accessibility.AccessibilityProperties;
-    import flash.display.ColorCorrection;
-    import flash.display.ColorCorrectionSupport;
     import flash.errors.IllegalOperationError;
     import flash.events.Event;
-    import flash.filters.BitmapFilter;
     import flash.geom.Rectangle;
     import flash.geom.Transform;
     import flash.text.TextSnapshot;
@@ -74,10 +72,6 @@ package flash.display {
         }
 
         override public function set height(value:Number):void {
-            throw new IllegalOperationError("Error #2071: The Stage class does not implement this property or method.", 2071);
-        }
-
-        public function set loaderInfo(value:LoaderInfo):void {
             throw new IllegalOperationError("Error #2071: The Stage class does not implement this property or method.", 2071);
         }
 
@@ -277,6 +271,51 @@ package flash.display {
         public function set mouseLock(value:Boolean):void {
             stub_setter("flash.display.Stage", "mouseLock");
             this._mouseLock = value;
+        }
+
+        [API("668")]
+        public static function get supportsOrientationChange():Boolean {
+            stub_getter("flash.display.Stage", "supportsOrientationChange");
+            return false;
+        }
+
+        [API("671")]
+        public function get supportedOrientations():Vector.<String> {
+            stub_getter("flash.display.Stage", "supportedOrientations");
+            return new Vector.<String>();
+        }
+
+        [API("668")]
+        public function get autoOrients():Boolean {
+            stub_getter("flash.display.Stage", "autoOrients");
+            return false;
+        }
+
+        [API("668")]
+        public function set autoOrients(value:Boolean):void {
+            stub_setter("flash.display.Stage", "autoOrients");
+        }
+
+        [API("668")]
+        public function get orientation():String {
+            stub_getter("flash.display.Stage", "orientation");
+            return StageOrientation.UNKNOWN;
+        }
+
+        [API("668")]
+        public function get deviceOrientation():String {
+            stub_getter("flash.display.Stage", "deviceOrientation");
+            return StageOrientation.UNKNOWN;
+        }
+
+        [API("668")]
+        public function setOrientation(newOrientation:String):void {
+            stub_method("flash.display.Stage", "setOrientation");
+        }
+
+        [API("668")]
+        public function setAspectRatio(newAspectRatio:String):void {
+            stub_method("flash.display.Stage", "setAspectRatio");
         }
     }
 }

@@ -181,10 +181,9 @@ impl<'gc> ScopeChain<'gc> {
                 // NOTE: We are manually searching the vtable's traits so we can figure out which namespace the trait
                 // belongs to.
                 let values = scope.values();
-                if let Some(vtable) = values.vtable() {
-                    if let Some((namespace, _)) = vtable.get_trait_with_ns(multiname) {
-                        return Ok(Some((Some(namespace), values)));
-                    }
+                let vtable = values.vtable();
+                if let Some((namespace, _)) = vtable.get_trait_with_ns(multiname) {
+                    return Ok(Some((Some(namespace), values)));
                 }
 
                 // Wasn't in the objects traits, let's try dynamic properties if this is a with scope.
@@ -199,7 +198,7 @@ impl<'gc> ScopeChain<'gc> {
         if let Some((qname, script)) = self.domain.get_defining_script(multiname)? {
             return Ok(Some((
                 Some(qname.namespace()),
-                script.globals(&mut activation.context)?,
+                script.globals(activation.context)?,
             )));
         }
         Ok(None)
@@ -238,7 +237,7 @@ impl<'gc> ScopeChain<'gc> {
     pub fn get_entry_for_multiname(
         &self,
         multiname: &Multiname<'gc>,
-    ) -> Option<Option<(Option<Class<'gc>>, u32)>> {
+    ) -> Option<Option<(Class<'gc>, u32)>> {
         if let Some(container) = self.container {
             for (index, scope) in container.scopes.iter().enumerate().skip(1).rev() {
                 if scope.with() {

@@ -677,7 +677,7 @@ fn is_dependent<'gc>(
 ) -> Result<Value<'gc>, Error<'gc>> {
     if let Some(prim) = this.as_primitive() {
         if let Value::String(s) = *prim {
-            return Ok(s.owner().is_some().into());
+            return Ok(s.is_dependent().into());
         }
     }
     panic!();
@@ -691,6 +691,7 @@ pub fn create_class<'gc>(activation: &mut Activation<'_, 'gc>) -> Class<'gc> {
         Some(activation.avm2().classes().object.inner_class_definition()),
         Method::from_builtin(instance_init, "<String instance initializer>", mc),
         Method::from_builtin(class_init, "<String class initializer>", mc),
+        activation.avm2().classes().class.inner_class_definition(),
         mc,
     );
 
@@ -752,7 +753,14 @@ pub fn create_class<'gc>(activation: &mut Activation<'_, 'gc>) -> Class<'gc> {
 
     class.mark_traits_loaded(activation.context.gc_context);
     class
-        .init_vtable(&mut activation.context)
+        .init_vtable(activation.context)
+        .expect("Native class's vtable should initialize");
+
+    let c_class = class.c_class().expect("Class::new returns an i_class");
+
+    c_class.mark_traits_loaded(activation.context.gc_context);
+    c_class
+        .init_vtable(activation.context)
         .expect("Native class's vtable should initialize");
 
     class

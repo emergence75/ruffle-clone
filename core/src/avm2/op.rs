@@ -4,7 +4,7 @@ use crate::avm2::script::Script;
 use crate::string::AvmAtom;
 
 use gc_arena::{Collect, Gc};
-use swf::avm2::types::{Class as AbcClass, Exception, Index, LookupSwitch, Method, Namespace};
+use swf::avm2::types::{Exception, Index, LookupSwitch, Method, Namespace};
 
 #[derive(Clone, Collect, Debug)]
 #[collect(no_drop)]
@@ -69,13 +69,19 @@ pub enum Op<'gc> {
     Coerce {
         class: Class<'gc>,
     },
+    CoerceSwapPop {
+        class: Class<'gc>,
+    },
     CoerceA,
     CoerceB,
     CoerceD,
+    CoerceDSwapPop,
     CoerceI,
+    CoerceISwapPop,
     CoerceO,
     CoerceS,
     CoerceU,
+    CoerceUSwapPop,
     Construct {
         num_args: u32,
     },
@@ -253,8 +259,7 @@ pub enum Op<'gc> {
         index: Index<Exception>,
     },
     NewClass {
-        #[collect(require_static)]
-        index: Index<AbcClass>,
+        class: Class<'gc>,
     },
     NewFunction {
         #[collect(require_static)]

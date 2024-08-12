@@ -26,12 +26,6 @@
             "all_frames": true,
             "run_at": "document_start",
         },
-        {
-            "matches": ["https://www.4399.com/flash/*"],
-            "js": ["dist/siteContentScript4399.js"],
-            "world": "MAIN",
-            "run_at": "document_start",
-        }
     ],
 
     "content_security_policy": {
@@ -49,7 +43,7 @@
         "page": "options.html",
         "open_in_tab": true,
     },
-    "host_permissions": ["<all_urls>"], // To allow script injecting + the internal player to bypass CORS
+    "host_permissions": ["<all_urls>"], // To allow script injecting + the internal player to bypass CORS + SWF takeover
     "permissions": [
         "storage",
         "scripting",

@@ -229,7 +229,12 @@ impl<'gc> TranslationUnit<'gc> {
         self.0.write(activation.context.gc_context).classes[class_index as usize] = Some(class);
 
         class.load_traits(activation, self, class_index)?;
-        class.init_vtable(&mut activation.context)?;
+
+        class.init_vtable(activation.context)?;
+        class
+            .c_class()
+            .expect("Class::from_abc_index returns an i_class")
+            .init_vtable(activation.context)?;
 
         Ok(class)
     }
@@ -250,9 +255,13 @@ impl<'gc> TranslationUnit<'gc> {
         drop(read);
 
         let object_class = activation.avm2().classes().object;
+        let class_classdef = activation.avm2().classes().class.inner_class_definition();
 
-        let global_classdef =
-            global_scope::create_class(activation, object_class.inner_class_definition());
+        let global_classdef = global_scope::create_class(
+            activation,
+            object_class.inner_class_definition(),
+            class_classdef,
+        );
 
         let global_class =
             ClassObject::from_class(activation, global_classdef, Some(object_class))?;
@@ -263,7 +272,7 @@ impl<'gc> TranslationUnit<'gc> {
             self,
             script_index,
             global_obj,
-            global_classdef,
+            global_class,
             domain,
             activation,
         )?;
@@ -340,7 +349,7 @@ impl<'gc> TranslationUnit<'gc> {
     pub fn pool_namespace(
         self,
         ns_index: Index<AbcNamespace>,
-        context: &mut UpdateContext<'_, 'gc>,
+        context: &mut UpdateContext<'gc>,
     ) -> Result<Namespace<'gc>, Error<'gc>> {
         let read = self.0.read();
         if let Some(Some(namespace)) = read.namespaces.get(ns_index.0 as usize) {
@@ -360,7 +369,7 @@ impl<'gc> TranslationUnit<'gc> {
     pub fn pool_maybe_uninitialized_multiname(
         self,
         multiname_index: Index<AbcMultiname>,
-        context: &mut UpdateContext<'_, 'gc>,
+        context: &mut UpdateContext<'gc>,
     ) -> Result<Gc<'gc, Multiname<'gc>>, Error<'gc>> {
         let mc = context.gc_context;
         let read = self.0.read();
@@ -384,7 +393,7 @@ impl<'gc> TranslationUnit<'gc> {
     pub fn pool_multiname_static(
         self,
         multiname_index: Index<AbcMultiname>,
-        context: &mut UpdateContext<'_, 'gc>,
+        context: &mut UpdateContext<'gc>,
     ) -> Result<Gc<'gc, Multiname<'gc>>, Error<'gc>> {
         let multiname = self.pool_maybe_uninitialized_multiname(multiname_index, context)?;
         if multiname.has_lazy_component() {
@@ -401,7 +410,7 @@ impl<'gc> TranslationUnit<'gc> {
     pub fn pool_multiname_static_any(
         self,
         multiname_index: Index<AbcMultiname>,
-        context: &mut UpdateContext<'_, 'gc>,
+        context: &mut UpdateContext<'gc>,
     ) -> Result<Gc<'gc, Multiname<'gc>>, Error<'gc>> {
         if multiname_index.0 == 0 {
             let mc = context.gc_context;
@@ -425,6 +434,9 @@ pub struct ScriptData<'gc> {
 
     /// The class of this script's global object.
     global_class: Option<Class<'gc>>,
+
+    /// The ClassObject of this script's global object.
+    global_class_obj: Option<ClassObject<'gc>>,
 
     /// The domain associated with this script.
     domain: Domain<'gc>,
@@ -464,6 +476,7 @@ impl<'gc> Script<'gc> {
             ScriptData {
                 globals,
                 global_class: None,
+                global_class_obj: None,
                 domain,
                 init: Method::from_builtin(
                     |_, _, _| Ok(Value::Undefined),
@@ -492,7 +505,7 @@ impl<'gc> Script<'gc> {
         unit: TranslationUnit<'gc>,
         script_index: u32,
         globals: Object<'gc>,
-        global_class: Class<'gc>,
+        global_class_obj: ClassObject<'gc>,
         domain: Domain<'gc>,
         activation: &mut Activation<'_, 'gc>,
     ) -> Result<Self, Error<'gc>> {
@@ -509,7 +522,8 @@ impl<'gc> Script<'gc> {
             activation.context.gc_context,
             ScriptData {
                 globals,
-                global_class: Some(global_class),
+                global_class: Some(global_class_obj.inner_class_definition()),
+                global_class_obj: Some(global_class_obj),
                 domain,
                 init,
                 traits: Vec::new(),
@@ -570,7 +584,7 @@ impl<'gc> Script<'gc> {
 
         self.global_class()
             .mark_traits_loaded(activation.context.gc_context);
-        self.global_class().init_vtable(&mut activation.context)?;
+        self.global_class().init_vtable(activation.context)?;
 
         Ok(())
     }
@@ -604,31 +618,34 @@ impl<'gc> Script<'gc> {
         self.0.write(mc).global_class = Some(global_class);
     }
 
+    pub fn set_global_class_obj(self, mc: &Mutation<'gc>, global_class_obj: ClassObject<'gc>) {
+        self.0.write(mc).global_class_obj = Some(global_class_obj);
+    }
+
     /// Return the global scope for the script.
     ///
     /// If the script has not yet been initialized, this will initialize it on
     /// the same stack.
-    pub fn globals(self, context: &mut UpdateContext<'_, 'gc>) -> Result<Object<'gc>, Error<'gc>> {
+    pub fn globals(self, context: &mut UpdateContext<'gc>) -> Result<Object<'gc>, Error<'gc>> {
         let mut write = self.0.write(context.gc_context);
 
         if !write.initialized {
             write.initialized = true;
 
             let globals = write.globals;
-            let mut null_activation = Activation::from_nothing(context.reborrow());
             let domain = write.domain;
 
             drop(write);
 
             let scope = ScopeChain::new(domain);
 
-            globals.vtable().unwrap().init_vtable(
-                globals.instance_class().unwrap(),
-                globals.instance_of(),
+            globals.vtable().init_vtable(
+                globals.instance_class(),
+                self.0.read().global_class_obj,
                 &self.traits()?,
                 Some(scope),
                 None,
-                &mut null_activation.context,
+                context.gc_context,
             );
             globals.install_instance_slots(context.gc_context);
 

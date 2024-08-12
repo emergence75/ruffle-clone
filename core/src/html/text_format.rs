@@ -6,14 +6,15 @@ use crate::string::{Integer, SwfStrExt as _, Units, WStr, WString};
 use crate::tag_utils::SwfMovie;
 use gc_arena::Collect;
 use quick_xml::{escape::escape, events::Event, Reader};
+use ruffle_wstr::utils::swf_is_newline;
 use std::borrow::Cow;
 use std::cmp::{min, Ordering};
 use std::collections::VecDeque;
 use std::fmt::Write;
 use std::sync::Arc;
 
-const ANY_NEWLINE: &[u8] = &[b'\n', b'\r'];
-const HTML_NEWLINE: u8 = b'\n';
+const HTML_NEWLINE: u16 = b'\r' as u16;
+const HTML_SPACE: u16 = b' ' as u16;
 
 /// Replace HTML entities with their equivalent characters.
 ///
@@ -150,7 +151,7 @@ impl TextFormat {
     pub fn from_swf_tag(
         et: swf::EditText<'_>,
         swf_movie: Arc<SwfMovie>,
-        context: &mut UpdateContext<'_, '_>,
+        context: &mut UpdateContext<'_>,
     ) -> Self {
         let encoding = swf_movie.encoding();
         let movie_library = context.library.library_for_movie_mut(swf_movie);
@@ -626,6 +627,7 @@ impl FormatSpans {
         html: &WStr,
         default_format: TextFormat,
         is_multiline: bool,
+        condense_white: bool,
         swf_version: u8,
     ) -> Self {
         // For SWF version 6, the multiline property exists and may be changed,
@@ -701,7 +703,7 @@ impl FormatSpans {
                     match tag_name {
                         b"br" => {
                             if is_multiline {
-                                text.push_byte(HTML_NEWLINE);
+                                text.push(HTML_NEWLINE);
                                 spans.push(TextSpan::with_length_and_format(1, &format));
                             }
 
@@ -711,7 +713,7 @@ impl FormatSpans {
                         b"sbr" => {
                             // TODO: <sbr> tags do not add a newline, but rather only break
                             // the format span.
-                            text.push_byte(HTML_NEWLINE);
+                            text.push(HTML_NEWLINE);
                             spans.push(TextSpan::with_length_and_format(1, &format));
 
                             // Skip push to `format_stack`.
@@ -822,12 +824,12 @@ impl FormatSpans {
                             format.underline = Some(true);
                         }
                         b"li" => {
-                            let is_last_nl = text.chars().last() == Some(Ok(HTML_NEWLINE as char));
+                            let is_last_nl = text.iter().last() == Some(HTML_NEWLINE);
                             if is_multiline && !is_last_nl && text.len() > 0 {
                                 // If the last paragraph was not closed and
                                 // there was some text since then,
                                 // we need to close it here.
-                                text.push_byte(HTML_NEWLINE);
+                                text.push(HTML_NEWLINE);
                                 spans.push(TextSpan::with_length_and_format(
                                     1,
                                     format_stack.last().unwrap(),
@@ -883,6 +885,11 @@ impl FormatSpans {
                         // is any non-whitespace character.
                         break 'text;
                     }
+                    let e = if condense_white {
+                        Self::condense_white_in_text(e)
+                    } else {
+                        e.replace(swf_is_newline, WStr::from_units(&[HTML_NEWLINE]))
+                    };
                     text.push_str(&e);
                     spans.push(TextSpan::with_length_and_format(e.len(), &format));
                 }
@@ -907,7 +914,7 @@ impl FormatSpans {
                             continue;
                         }
                         b"li" if is_multiline => {
-                            text.push_byte(HTML_NEWLINE);
+                            text.push(HTML_NEWLINE);
                             spans.push(TextSpan::with_length_and_format(
                                 1,
                                 format_stack.last().unwrap(),
@@ -920,7 +927,7 @@ impl FormatSpans {
                             }
                             p_open = false;
 
-                            text.push_byte(HTML_NEWLINE);
+                            text.push(HTML_NEWLINE);
                             let mut span =
                                 TextSpan::with_length_and_format(1, format_stack.last().unwrap());
                             // </p> has some weird behaviors related to the format of its children (b,i,u,a),
@@ -963,8 +970,28 @@ impl FormatSpans {
             spans,
             default_format,
         };
+        if condense_white && swf_version >= 8 {
+            ret.condense_white_swf8();
+        }
         ret.normalize();
         ret
+    }
+
+    fn condense_white_in_text(string: WString) -> WString {
+        let mut result = WString::with_capacity(string.len(), string.is_wide());
+        let mut last_white = false;
+        for ch in string.iter() {
+            if ruffle_wstr::utils::swf_is_whitespace(ch) {
+                if !last_white {
+                    result.push(HTML_SPACE);
+                    last_white = true;
+                }
+            } else {
+                result.push(ch);
+                last_white = false;
+            }
+        }
+        result
     }
 
     pub fn default_format(&self) -> &TextFormat {
@@ -1095,6 +1122,39 @@ impl FormatSpans {
         );
 
         (start_pos, end_pos)
+    }
+
+    /// SWF8+ condenses whitespace not only in text, but across HTML elements too.
+    /// This method assumes that whitespace in text has already been condensed.
+    fn condense_white_swf8(&mut self) {
+        let mut removal_start = Some(0);
+        let mut to_remove = Vec::new();
+        for (i, ch) in self.text().iter().enumerate() {
+            let is_newline = ch == HTML_NEWLINE;
+            let is_space = ch == HTML_SPACE;
+
+            // We have to preserve newlines here, as newlines inputted in text
+            // are already condensed into space.
+            if is_newline || !is_space {
+                if let Some(space_start) = removal_start {
+                    to_remove.push((space_start, i));
+                }
+                removal_start = None;
+            }
+
+            // However, HTML newlines are also considered as space here.
+            if (is_newline || is_space) && removal_start.is_none() {
+                removal_start = Some(i + 1);
+            }
+        }
+        if let Some(space_start) = removal_start {
+            to_remove.push((space_start, self.text().len()));
+        }
+        for &(from, to) in to_remove.iter().rev() {
+            if from != to {
+                self.replace_text(from, to, WStr::empty(), None);
+            }
+        }
     }
 
     /// Adjust the format spans in several ways to ensure that other function
@@ -1618,14 +1678,14 @@ impl<'a> FormatState<'a> {
     }
 
     fn push_text(&mut self, text: &WStr) {
-        let (text, ends_with_nl) = if text.ends_with(ANY_NEWLINE) {
+        let (text, ends_with_nl) = if text.ends_with(swf_is_newline) {
             (&text[0..text.len() - 1], true)
         } else {
             (text, false)
         };
 
         let mut first = true;
-        for text in text.split(ANY_NEWLINE) {
+        for text in text.split(swf_is_newline) {
             if !first {
                 self.close_all_tags();
                 // Ensure that tags are open after closing them.

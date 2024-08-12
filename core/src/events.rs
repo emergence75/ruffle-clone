@@ -24,6 +24,7 @@ pub enum PlayerEvent {
         x: f64,
         y: f64,
         button: MouseButton,
+        index: Option<usize>,
     },
     MouseLeave,
     MouseWheel {
@@ -41,6 +42,8 @@ pub enum PlayerEvent {
     TextControl {
         code: TextControlCode,
     },
+    FocusGained,
+    FocusLost,
 }
 
 /// The distance scrolled by the mouse wheel.
@@ -89,6 +92,16 @@ impl Eq for MouseWheelDelta {}
 pub enum ClipEventResult {
     NotHandled,
     Handled,
+}
+
+impl From<bool> for ClipEventResult {
+    fn from(value: bool) -> Self {
+        if value {
+            Self::Handled
+        } else {
+            Self::NotHandled
+        }
+    }
 }
 
 /// An event type that can be handled by a movie clip instance.
@@ -143,22 +156,52 @@ pub enum ClipEvent<'gc> {
     },
     Load,
 
-    /// Mouse button was released.
+    /// Left mouse button was released.
     ///
     /// This is an anycast event.
     MouseUp,
 
-    /// Mouse button was released inside this current display object.
+    /// Right mouse button was released.
+    ///
+    /// Analogous to [`ClipEvent::MouseUp`], but for right mouse button.
+    RightMouseUp,
+
+    /// Middle mouse button was released.
+    ///
+    /// Analogous to [`ClipEvent::MouseUp`], but for middle mouse button.
+    MiddleMouseUp,
+
+    /// Left mouse button was released inside this current display object.
     ///
     /// This is a targeted equivalent to `MouseUp` and corresponds directly to
     /// the AVM2 `mouseUp` event, which has no AVM1 equivalent. The target of
     /// this event is determined by the position of the mouse cursor.
     MouseUpInside,
 
-    /// Mouse button was pressed.
+    /// Right mouse button was released inside this current display object.
+    ///
+    /// Analogous to [`ClipEvent::MouseUpInside`], but for right mouse button.
+    RightMouseUpInside,
+
+    /// Middle mouse button was released inside this current display object.
+    ///
+    /// Analogous to [`ClipEvent::MouseUpInside`], but for middle mouse button.
+    MiddleMouseUpInside,
+
+    /// Left mouse button was pressed.
     ///
     /// This is an anycast event.
     MouseDown,
+
+    /// Right mouse button was pressed.
+    ///
+    /// Analogous to [`ClipEvent::MouseDown`], but for right mouse button.
+    RightMouseDown,
+
+    /// Middle mouse button was pressed.
+    ///
+    /// Analogous to [`ClipEvent::MouseDown`], but for middle mouse button.
+    MiddleMouseDown,
 
     /// Mouse was moved.
     ///
@@ -171,12 +214,28 @@ pub enum ClipEvent<'gc> {
     /// `mouseMove` event, since AVM2 cannot consume anycast events.
     MouseMoveInside,
 
-    /// Mouse button was pressed inside this current display object.
+    /// Left mouse button was pressed inside this current display object.
     ///
     /// This is a targeted equivalent to `MouseDown` and is available in both
     /// AVM1 and AVM2. The target of this event is determined by the position
     /// of the mouse cursor.
-    Press,
+    Press {
+        /// The index of this click in a click sequence performed in a quick succession.
+        ///
+        /// For instance the value of 0 indicates it's a single click,
+        /// the number of 1 indicates it's a double click, etc.
+        index: usize,
+    },
+
+    /// Right mouse button was pressed inside this current display object.
+    ///
+    /// Analogous to [`ClipEvent::Press`], but for right mouse button.
+    RightPress,
+
+    /// Middle mouse button was pressed inside this current display object.
+    ///
+    /// Analogous to [`ClipEvent::Press`], but for middle mouse button.
+    MiddlePress,
 
     /// Mouse moved out of a display object.
     ///
@@ -203,19 +262,43 @@ pub enum ClipEvent<'gc> {
         from: Option<InteractiveObject<'gc>>,
     },
 
-    /// Mouse button was released inside a previously-pressed display object.
+    /// Left mouse button was released inside a previously-pressed display object.
     ///
     /// This is a targeted equivalent to `MouseUp` and is available in both
     /// AVM1 and AVM2. The target of this event is the last target of the
     /// `Press` event.
-    Release,
+    Release {
+        /// The index of this click, same as the index of the last [`ClipEvent::Press`] event.
+        index: usize,
+    },
 
-    /// Mouse button was released outside a previously-pressed display object.
+    /// Right mouse button was released inside a previously-pressed display object.
+    ///
+    /// Analogous to [`ClipEvent::Release`], but for right mouse button.
+    RightRelease,
+
+    /// Middle mouse button was released inside a previously-pressed display object.
+    ///
+    /// Analogous to [`ClipEvent::Release`], but for middle mouse button.
+    MiddleRelease,
+
+    /// Left mouse button was released outside a previously-pressed display object.
     ///
     /// This is a targeted equivalent to `MouseUp` and is available in both
     /// AVM1 and AVM2. The target of this event is the last target of the
     /// `Press` event.
     ReleaseOutside,
+
+    /// Right mouse button was released outside a previously-pressed display object.
+    ///
+    /// Analogous to [`ClipEvent::ReleaseOutside`], but for right mouse button.
+    RightReleaseOutside,
+
+    /// Middle mouse button was released outside a previously-pressed display object.
+    ///
+    /// Analogous to [`ClipEvent::ReleaseOutside`], but for middle mouse button.
+    MiddleReleaseOutside,
+
     Unload,
 
     /// Mouse wheel was turned over a particular display object.
@@ -267,15 +350,13 @@ impl<'gc> ClipEvent<'gc> {
             ClipEvent::MouseDown => Some(ClipEventFlag::MOUSE_DOWN),
             ClipEvent::MouseMove => Some(ClipEventFlag::MOUSE_MOVE),
             ClipEvent::MouseUp => Some(ClipEventFlag::MOUSE_UP),
-            ClipEvent::Press => Some(ClipEventFlag::PRESS),
+            ClipEvent::Press { .. } => Some(ClipEventFlag::PRESS),
             ClipEvent::RollOut { .. } => Some(ClipEventFlag::ROLL_OUT),
             ClipEvent::RollOver { .. } => Some(ClipEventFlag::ROLL_OVER),
-            ClipEvent::Release => Some(ClipEventFlag::RELEASE),
+            ClipEvent::Release { .. } => Some(ClipEventFlag::RELEASE),
             ClipEvent::ReleaseOutside => Some(ClipEventFlag::RELEASE_OUTSIDE),
             ClipEvent::Unload => Some(ClipEventFlag::UNLOAD),
-            ClipEvent::MouseWheel { .. }
-            | ClipEvent::MouseMoveInside
-            | ClipEvent::MouseUpInside => None,
+            _ => None,
         }
     }
 
@@ -326,15 +407,13 @@ impl<'gc> ClipEvent<'gc> {
             ClipEvent::MouseDown => Some("onMouseDown"),
             ClipEvent::MouseMove => Some("onMouseMove"),
             ClipEvent::MouseUp => Some("onMouseUp"),
-            ClipEvent::Press => Some("onPress"),
+            ClipEvent::Press { .. } => Some("onPress"),
             ClipEvent::RollOut { .. } => Some("onRollOut"),
             ClipEvent::RollOver { .. } => Some("onRollOver"),
-            ClipEvent::Release => Some("onRelease"),
+            ClipEvent::Release { .. } => Some("onRelease"),
             ClipEvent::ReleaseOutside => Some("onReleaseOutside"),
             ClipEvent::Unload => Some("onUnload"),
-            ClipEvent::MouseWheel { .. }
-            | ClipEvent::MouseMoveInside
-            | ClipEvent::MouseUpInside => None,
+            _ => None,
         }
     }
 }
@@ -514,7 +593,7 @@ impl KeyCode {
 }
 
 /// Subset of `KeyCode` that contains only mouse buttons.
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub enum MouseButton {
     Unknown = KeyCode::Unknown as isize,
     Left = KeyCode::MouseLeft as isize,

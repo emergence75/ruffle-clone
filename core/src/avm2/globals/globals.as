@@ -1,6 +1,12 @@
 // List is ordered alphabetically, except where superclasses/interfaces
 // need to come before subclasses and implementations.
 
+package {
+    // This names 'self.AS3::SomeMethod()' calls in 'XML.as' use a 'callproperty'
+    // opcode, instead of a weird dynamic lookup of the 'AS3' namespace
+    namespace AS3 = "http://adobe.com/AS3/2006/builtin";
+}
+
 include "__ruffle__/stubs.as"
 
 include "Error.as"
@@ -28,22 +34,29 @@ include "flash/accessibility/AccessibilityImplementation.as"
 include "flash/accessibility/AccessibilityProperties.as"
 include "flash/accessibility/ISearchableText.as"
 include "flash/accessibility/ISimpleTextSelection.as"
+
+include "flash/concurrent/Condition.as"
+include "flash/concurrent/Mutex.as"
+
 include "flash/crypto.as"
+
 include "flash/utils/IDataInput.as"
 include "flash/utils/IDataOutput.as"
+include "flash/utils/IDataInput2.as"
+include "flash/utils/IDataOutput2.as"
 include "flash/utils/IExternalizable.as"
 include "flash/utils/ByteArray.as"
 include "flash/utils/Dictionary.as"
-include "flash/desktop/ClipboardFormats.as"
-include "flash/desktop/ClipboardTransferMode.as"
-include "flash/desktop/Clipboard.as"
-include "flash/desktop/IFilePromise.as"
 
 include "flash/events/IEventDispatcher.as"
 include "flash/events/EventDispatcher.as"
 
-include "flash/concurrent/Condition.as"
-include "flash/concurrent/Mutex.as"
+include "flash/desktop/ClipboardFormats.as"
+include "flash/desktop/ClipboardTransferMode.as"
+include "flash/desktop/Clipboard.as"
+include "flash/desktop/IFilePromise.as"
+include "flash/desktop/NativeProcess.as"
+include "flash/desktop/NativeProcessStartupInfo.as"
 
 include "flash/display/IBitmapDrawable.as"
 include "flash/display/DisplayObject.as"
@@ -104,11 +117,16 @@ include "flash/display/SpreadMethod.as"
 include "flash/display/Sprite.as"
 include "flash/display/Stage3D.as"
 include "flash/display/StageAlign.as"
+include "flash/display/StageAspectRatio.as"
 include "flash/display/StageDisplayState.as"
+include "flash/display/StageOrientation.as"
 include "flash/display/StageQuality.as"
 include "flash/display/StageScaleMode.as"
 include "flash/display/SWFVersion.as"
 include "flash/display/TriangleCulling.as"
+
+include "flash/display/MovieClip.as"
+
 include "flash/display3D/Context3D.as"
 include "flash/display3D/Context3DBlendFactor.as"
 include "flash/display3D/Context3DBufferUsage.as"
@@ -132,7 +150,13 @@ include "flash/display3D/textures/Texture.as"
 include "flash/display3D/textures/RectangleTexture.as"
 include "flash/display3D/VertexBuffer3D.as"
 
-include "flash/display/MovieClip.as"
+include "flash/errors/IOError.as" // IOError is a superclass of EOFError
+include "flash/errors/EOFError.as"
+include "flash/errors/IllegalOperationError.as"
+include "flash/errors/InvalidSWFError.as"
+include "flash/errors/MemoryError.as"
+include "flash/errors/ScriptTimeoutError.as"
+include "flash/errors/StackOverflowError.as"
 
 // Event needs to come before its subclasses
 include "flash/events/Event.as"
@@ -147,6 +171,7 @@ include "flash/events/AudioOutputChangeEvent.as"
 include "flash/events/AVDictionaryDataEvent.as"
 include "flash/events/AVHTTPStatusEvent.as"
 include "flash/events/AVPauseAtPeriodEndEvent.as"
+include "flash/events/AVStatusEvent.as"
 include "flash/events/ContextMenuEvent.as"
 include "flash/events/DataEvent.as"
 include "flash/events/DRMAuthenticationCompleteEvent.as"
@@ -163,6 +188,7 @@ include "flash/events/HTTPStatusEvent.as"
 include "flash/events/IOErrorEvent.as"
 include "flash/events/KeyboardEvent.as"
 include "flash/events/NetDataEvent.as"
+include "flash/events/NetFilterEvent.as"
 include "flash/events/NetStatusEvent.as"
 include "flash/events/PressAndTapGestureEvent.as"
 include "flash/events/ProgressEvent.as"
@@ -185,13 +211,7 @@ include "flash/events/UncaughtErrorEvents.as"
 include "flash/events/VideoEvent.as"
 include "flash/events/VideoTextureEvent.as"
 
-include "flash/errors/IOError.as" // IOError is a superclass of EOFError
-include "flash/errors/EOFError.as"
-include "flash/errors/IllegalOperationError.as"
-include "flash/errors/InvalidSWFError.as"
-include "flash/errors/MemoryError.as"
-include "flash/errors/ScriptTimeoutError.as"
-include "flash/errors/StackOverflowError.as"
+include "flash/external/ExternalInterface.as"
 
 include "flash/filters/BitmapFilter.as"
 include "flash/filters/BitmapFilterQuality.as"
@@ -218,6 +238,7 @@ include "flash/geom/Rectangle.as"
 include "flash/geom/Transform.as"
 include "flash/geom/Utils3D.as"
 include "flash/geom/Vector3D.as"
+
 include "flash/globalization/CollatorMode.as"
 include "flash/globalization/CurrencyParseResult.as"
 include "flash/globalization/CurrencyFormatter.as"
@@ -233,7 +254,9 @@ include "flash/globalization/NumberParseResult.as"
 
 include "flash/media/AudioDecoder.as"
 include "flash/media/AudioOutputChangeReason.as"
+include "flash/media/AVCaptionStyle.as"
 include "flash/media/AVNetworkingParams.as"
+include "flash/media/AVResult.as"
 include "flash/media/AVTagData.as"
 include "flash/media/Camera.as"
 include "flash/media/H264Level.as"
@@ -255,8 +278,6 @@ include "flash/media/VideoCodec.as"
 include "flash/media/VideoStatus.as"
 include "flash/media/VideoStreamSettings.as"
 
-include "flash/external/ExternalInterface.as"
-
 include "flash/net.as"
 include "flash/net/DatagramSocket.as"
 include "flash/net/FileFilter.as"
@@ -266,14 +287,17 @@ include "flash/net/IDynamicPropertyOutput.as"
 include "flash/net/IDynamicPropertyWriter.as"
 include "flash/net/LocalConnection.as"
 include "flash/net/NetConnection.as"
+include "flash/net/NetGroup.as"
 include "flash/net/NetGroupReceiveMode.as"
 include "flash/net/NetGroupReplicationStrategy.as"
 include "flash/net/NetGroupSendMode.as"
 include "flash/net/NetGroupSendResult.as"
 include "flash/net/NetStream.as"
+include "flash/net/NetStreamAppendBytesAction.as"
 include "flash/net/NetStreamInfo.as"
 include "flash/net/NetStreamMulticastInfo.as"
 include "flash/net/NetStreamPlayOptions.as"
+include "flash/net/NetStreamPlayTransitions.as"
 include "flash/net/URLRequestDefaults.as"
 include "flash/net/ObjectEncoding.as"
 include "flash/net/Responder.as"
@@ -288,6 +312,11 @@ include "flash/net/URLRequestMethod.as"
 include "flash/net/URLStream.as"
 include "flash/net/URLVariables.as"
 include "flash/net/XMLSocket.as"
+
+include "flash/filesystem/File.as" // File extends FileReference
+
+include "flash/net/drm/AuthenticationMethod.as"
+include "flash/net/drm/LoadVoucherSetting.as"
 
 include "flash/printing/PrintJob.as"
 include "flash/printing/PrintJobOptions.as"
@@ -307,6 +336,7 @@ include "flash/security/X509Certificate.as"
 include "flash/security/X500DistinguishedName.as"
 
 include "flash/sensors/Accelerometer.as"
+include "flash/sensors/Geolocation.as"
 
 include "flash/system.as"
 include "flash/system/ApplicationDomain.as"
@@ -381,12 +411,15 @@ include "flash/text/engine/TextBlock.as"
 include "flash/text/engine/TextElement.as"
 include "flash/text/engine/TextLine.as"
 include "flash/text/engine/TextLineCreationResult.as"
+include "flash/text/engine/TextLineMirrorRegion.as"
 include "flash/text/engine/TextLineValidity.as"
 include "flash/text/engine/TextRotation.as"
 include "flash/text/engine/TypographicCase.as"
 
 include "flash/text/ime/CompositionAttributeRange.as"
 include "flash/text/ime/IIMEClient.as"
+
+include "flash/trace/Trace.as"
 
 include "flash/ui/ContextMenu.as"
 include "flash/ui/ContextMenuBuiltInItems.as"

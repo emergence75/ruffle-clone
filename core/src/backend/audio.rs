@@ -32,6 +32,7 @@ mod decoders {
     }
 }
 
+use crate::swf::{CharacterId, SoundInfo};
 use thiserror::Error;
 use web_time::Duration;
 
@@ -377,7 +378,7 @@ impl<'gc> AudioManager<'gc> {
     }
 
     /// Update state of active sounds. Should be called once per frame.
-    pub fn update_sounds(context: &mut UpdateContext<'_, 'gc>) {
+    pub fn update_sounds(context: &mut UpdateContext<'gc>) {
         // We can't use 'context' to construct an event inside the
         // 'retain()' closure, so we queue the events up here, and fire
         // them after running 'retain()'
@@ -432,6 +433,8 @@ impl<'gc> AudioManager<'gc> {
         context.audio_manager.update_sound_transforms(context.audio);
     }
 
+    /// Starts a sound and optionally associates it with a Display Object.
+    /// Sounds associated with DOs are an AVM1/Timeline concept and should not be called from AVM2 scripts.
     pub fn start_sound(
         &mut self,
         audio: &mut dyn AudioBackend,
@@ -497,6 +500,8 @@ impl<'gc> AudioManager<'gc> {
         });
     }
 
+    /// Stops any sound associated with the given Display Object.
+    /// Sounds associated with DOs are an AVM1/Timeline concept and should not be called from AVM2 scripts.
     pub fn stop_sounds_with_display_object(
         &mut self,
         audio: &mut dyn AudioBackend,
@@ -504,7 +509,16 @@ impl<'gc> AudioManager<'gc> {
     ) {
         self.sounds.retain(move |sound| {
             if let Some(other) = sound.display_object {
-                if DisplayObject::ptr_eq(other, display_object) {
+                // [NA] This may or may not be correct, Flash is very inconsistent here
+                // If you make 50 movies with the same path and attach sounds to one of them,
+                // they all stop when you stop one of the movies.
+                // However, it also stops (some of?) them when they've changed their name too...
+
+                // Path can be expensive, so do the cheap checks first
+                if DisplayObject::ptr_eq(other, display_object)
+                    || (other.name() == display_object.name()
+                        && other.path() == display_object.path())
+                {
                     audio.stop_sound(sound.instance);
                     return false;
                 }
@@ -712,6 +726,38 @@ impl<'gc> AudioManager<'gc> {
                 audio.set_sound_transform(sound.instance, transform);
             }
             self.transforms_dirty = false;
+        }
+    }
+
+    pub fn perform_sound_event(
+        display_object: DisplayObject<'gc>,
+        context: &mut UpdateContext<'gc>,
+        character_id: CharacterId,
+        sound_info: &SoundInfo,
+    ) {
+        if let Some(handle) = context
+            .library
+            .library_for_movie_mut(display_object.movie())
+            .get_sound(character_id)
+        {
+            use swf::SoundEvent;
+            // The sound event type is controlled by the "Sync" setting in the Flash IDE.
+            match sound_info.event {
+                // "Event" sounds always play, independent of the timeline.
+                SoundEvent::Event => {
+                    let _ = context.start_sound(handle, sound_info, Some(display_object), None);
+                }
+
+                // "Start" sounds only play if an instance of the same sound is not already playing.
+                SoundEvent::Start => {
+                    if !context.is_sound_playing_with_handle(handle) {
+                        let _ = context.start_sound(handle, sound_info, Some(display_object), None);
+                    }
+                }
+
+                // "Stop" stops any active instances of a given sound.
+                SoundEvent::Stop => context.stop_sounds_with_handle(handle),
+            }
         }
     }
 }

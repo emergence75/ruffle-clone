@@ -14,10 +14,10 @@ workspace = true
 clap = { workspace = true }
 cpal = "0.15.3"
 egui = { workspace = true }
-egui_extras = { version = "0.28.0", features = ["image"] }
-egui-wgpu = { version = "0.28.0", features = ["winit"] }
+egui_extras = { git = "https://github.com/emilk/egui.git", rev = "37b1e1504db14697c39ce1c3bb5e58f4f2b819bf", default-features = false, features = ["image"] }
+egui-wgpu = { git = "https://github.com/emilk/egui.git", rev = "37b1e1504db14697c39ce1c3bb5e58f4f2b819bf", features = ["winit"] }
 image = { workspace = true, features = ["png"] }
-egui-winit = "0.28.0"
+egui-winit = { git = "https://github.com/emilk/egui.git", rev = "37b1e1504db14697c39ce1c3bb5e58f4f2b819bf" }
 fontdb = "0.20"
 ruffle_core = { path = "../core", features = ["audio", "clap", "mp3", "nellymoser", "default_compatibility_rules", "egui"] }
 ruffle_render = { path = "../render", features = ["clap"] }
@@ -42,23 +42,27 @@ wgpu = { workspace = true }
 futures = { workspace = true }
 chrono = { workspace = true }
 fluent-templates = "0.9.4"
-toml_edit = { version = "0.22.14", features = ["parse"] }
+toml_edit = { version = "0.22.17", features = ["parse"] }
 gilrs = "0.10"
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"]}
 
 # Deliberately held back to match tracy client used by profiling crate
 tracing-tracy = { version = "=0.10.4", optional = true }
 rand = "0.8.5"
+thiserror.workspace = true
+
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = "4.4.0"
 
 [target.'cfg(windows)'.dependencies]
 winapi = "0.3.9"
 
 [build-dependencies]
 embed-resource = "2"
-vergen = { version = "8.3.1", features = ["build", "git", "gitcl", "cargo"] }
+vergen = { version = "8.3.2", features = ["build", "git", "gitcl", "cargo"] }
 
 [features]
-default = ["software_video", "external_video"]
+default = ["software_video", "external_video", "lzma"]
 jpegxr = ["ruffle_core/jpegxr"]
 
 # core features
@@ -70,7 +74,6 @@ tracy = ["tracing-tracy", "ruffle_render_wgpu/profile-with-tracy"]
 
 # wgpu features
 render_debug_labels = ["ruffle_render_wgpu/render_debug_labels"]
-render_trace = ["ruffle_render_wgpu/render_trace"]
 
 # sandboxing
 sandbox = []

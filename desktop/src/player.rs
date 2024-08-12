@@ -125,7 +125,7 @@ impl ActivePlayer {
         opt: &LaunchOptions,
         event_loop: EventLoopProxy<RuffleEvent>,
         movie_url: &Url,
-        window: Rc<Window>,
+        window: Arc<Window>,
         descriptors: Arc<Descriptors>,
         movie_view: MovieView,
         font_database: Rc<fontdb::Database>,
@@ -391,7 +391,7 @@ impl ActivePlayer {
 pub struct PlayerController {
     player: Option<ActivePlayer>,
     event_loop: EventLoopProxy<RuffleEvent>,
-    window: Rc<Window>,
+    window: Arc<Window>,
     descriptors: Arc<Descriptors>,
     font_database: Rc<fontdb::Database>,
     preferences: GlobalPreferences,
@@ -400,7 +400,7 @@ pub struct PlayerController {
 impl PlayerController {
     pub fn new(
         event_loop: EventLoopProxy<RuffleEvent>,
-        window: Rc<Window>,
+        window: Arc<Window>,
         descriptors: Arc<Descriptors>,
         font_database: fontdb::Database,
         preferences: GlobalPreferences,
@@ -445,12 +445,14 @@ impl PlayerController {
         }
     }
 
-    pub fn handle_event(&self, event: PlayerEvent) {
+    pub fn handle_event(&self, event: PlayerEvent) -> bool {
         if let Some(mut player) = self.get() {
             if player.is_playing() {
-                player.handle_event(event);
+                return player.handle_event(event);
             }
         }
+
+        false
     }
 
     pub fn poll(&self) {
