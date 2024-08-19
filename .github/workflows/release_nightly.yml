@@ -9,8 +9,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  create-nightly-release:
-    name: Create Nightly Release
+  create-release:
+    name: Create Release
     runs-on: ubuntu-22.04
     outputs:
       is_active: ${{ steps.activity.outputs.is_active }}
@@ -62,8 +62,8 @@ jobs:
 
   build:
     name: Build ${{ matrix.build_name }}
-    needs: create-nightly-release
-    if: needs.create-nightly-release.outputs.is_active == 'true'
+    needs: create-release
+    if: needs.create-release.outputs.is_active == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -99,7 +99,7 @@ jobs:
             MSI_ARCH: x64
 
     env:
-      PACKAGE_FILE: ${{ needs.create-nightly-release.outputs.package_prefix }}-${{ matrix.build_name }}.${{ startsWith(matrix.build_name, 'win') && 'zip' || 'tar.gz' }}
+      PACKAGE_FILE: ${{ needs.create-release.outputs.package_prefix }}-${{ matrix.build_name }}.${{ startsWith(matrix.build_name, 'win') && 'zip' || 'tar.gz' }}
       CARGO_BUILD_DIR: target/${{ matrix.target }}/release
 
     runs-on: ${{ matrix.os }}
@@ -163,7 +163,7 @@ jobs:
 
       - name: Upload package
         if: runner.os != 'macOS'
-        run: gh release upload "${{ needs.create-nightly-release.outputs.tag_name }}" "${{ env.PACKAGE_FILE }}"
+        run: gh release upload "${{ needs.create-release.outputs.tag_name }}" "${{ env.PACKAGE_FILE }}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -186,10 +186,10 @@ jobs:
 
   build-mac-universal-binary:
     name: Build macOS universal binary
-    needs: [create-nightly-release, build, build-web]
+    needs: [create-release, build, build-web]
     runs-on: macos-14
     env:
-      PACKAGE_FILE: ${{ needs.create-nightly-release.outputs.package_prefix }}-macos-universal.tar.gz
+      PACKAGE_FILE: ${{ needs.create-release.outputs.package_prefix }}-macos-universal.tar.gz
     steps:
       - name: Clone Ruffle repo
         uses: actions/checkout@v4
@@ -278,14 +278,14 @@ jobs:
           tar -czvf ../${{ env.PACKAGE_FILE }} *
 
       - name: Upload package
-        run: gh release upload "${{ needs.create-nightly-release.outputs.tag_name }}" "${{ env.PACKAGE_FILE }}"
+        run: gh release upload "${{ needs.create-release.outputs.tag_name }}" "${{ env.PACKAGE_FILE }}"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-stub-report:
     name: Build AVM2 stub repository
-    needs: create-nightly-release
-    if: needs.create-nightly-release.outputs.is_active == 'true'
+    needs: create-release
+    if: needs.create-release.outputs.is_active == 'true'
     runs-on: ubuntu-22.04
     steps:
       - name: Clone Ruffle repo
@@ -300,14 +300,14 @@ jobs:
         run: ./stub-report/generate-report.sh
 
       - name: Upload report
-        run: gh release upload "${{ needs.create-nightly-release.outputs.tag_name }}" avm2_report.json
+        run: gh release upload "${{ needs.create-release.outputs.tag_name }}" avm2_report.json
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-web:
     name: Build web${{ matrix.demo && ' demo' || '' }}
-    needs: create-nightly-release
-    if: needs.create-nightly-release.outputs.is_active == 'true'
+    needs: create-release
+    if: needs.create-release.outputs.is_active == 'true'
     runs-on: ubuntu-22.04
     strategy:
       matrix:
@@ -374,7 +374,7 @@ jobs:
         shell: bash -l {0}
         run: |
           zip -r reproducible-source.zip . -x '/web/node_modules/*' '/web/*/node_modules/*' '/web/packages/*/dist/*' '/web/docker/docker_builds/packages/*' '/target/*' '/.git/*' '/tests/tests/swfs/*'
-          cp reproducible-source.zip "${{ needs.create-nightly-release.outputs.package_prefix }}-reproducible-source.zip"
+          cp reproducible-source.zip "${{ needs.create-release.outputs.package_prefix }}-reproducible-source.zip"
 
       - name: Upload reproducible source archive
         if: ${{ !matrix.demo }}
@@ -382,8 +382,8 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
         run: |
-          tag_name="${{ needs.create-nightly-release.outputs.tag_name }}"
-          package_file="${{ needs.create-nightly-release.outputs.package_prefix }}-reproducible-source.zip"
+          tag_name="${{ needs.create-release.outputs.tag_name }}"
+          package_file="${{ needs.create-release.outputs.package_prefix }}-reproducible-source.zip"
           gh release upload "$tag_name" "$package_file"
 
       - name: Build web docs
@@ -401,14 +401,14 @@ jobs:
 
       - name: Package selfhosted
         if: ${{ !matrix.demo }}
-        run: zip -r "${{ needs.create-nightly-release.outputs.package_prefix }}-web-selfhosted.zip" .
+        run: zip -r "${{ needs.create-release.outputs.package_prefix }}-web-selfhosted.zip" .
         working-directory: web/packages/selfhosted/dist
 
       - name: Upload selfhosted
         if: ${{ !matrix.demo }}
         run: |
-          tag_name="${{ needs.create-nightly-release.outputs.tag_name }}"
-          package_file="${{ needs.create-nightly-release.outputs.package_prefix }}-web-selfhosted.zip"
+          tag_name="${{ needs.create-release.outputs.tag_name }}"
+          package_file="${{ needs.create-release.outputs.package_prefix }}-web-selfhosted.zip"
           gh release upload "$tag_name" "$package_file"
         working-directory: web/packages/selfhosted/dist
         env:
@@ -417,8 +417,8 @@ jobs:
       - name: Upload generic extension
         if: ${{ !matrix.demo }}
         run: |
-          tag_name="${{ needs.create-nightly-release.outputs.tag_name }}"
-          package_file="${{ needs.create-nightly-release.outputs.package_prefix }}-web-extension.zip"
+          tag_name="${{ needs.create-release.outputs.tag_name }}"
+          package_file="${{ needs.create-release.outputs.package_prefix }}-web-extension.zip"
           cp "./web/packages/extension/dist/ruffle_extension.zip" "$package_file"
           gh release upload "$tag_name" "$package_file"
           rm "$package_file"
@@ -435,8 +435,8 @@ jobs:
       - name: Upload Firefox extension (unsigned)
         if: ${{ !matrix.demo }}
         run: |
-          tag_name="${{ needs.create-nightly-release.outputs.tag_name }}"
-          package_file="${{ needs.create-nightly-release.outputs.package_prefix }}-web-extension-firefox-unsigned.xpi"
+          tag_name="${{ needs.create-release.outputs.tag_name }}"
+          package_file="${{ needs.create-release.outputs.package_prefix }}-web-extension-firefox-unsigned.xpi"
           cp "./web/packages/extension/dist/firefox_unsigned.xpi" "$package_file"
           gh release upload "$tag_name" "$package_file"
           rm "$package_file"
@@ -497,7 +497,7 @@ jobs:
           git config user.name "RuffleBuild"
           git config user.email "ruffle@ruffle.rs"
           git add -A
-          git commit --amend -m "Nightly build ${{ needs.create-nightly-release.outputs.date }}"
+          git commit --amend -m "Nightly build ${{ needs.create-release.outputs.date }}"
         working-directory: demo
 
       - name: Push web demo
@@ -532,7 +532,7 @@ jobs:
           git config user.name "RuffleBuild"
           git config user.email "ruffle@ruffle.rs"
           git add -A
-          git commit --amend -m "Nightly build ${{ needs.create-nightly-release.outputs.date }}"
+          git commit --amend -m "Nightly build ${{ needs.create-release.outputs.date }}"
         working-directory: js-docs
 
       - name: Push JS docs
@@ -546,7 +546,7 @@ jobs:
 
   publish-aur-package:
     name: Publish AUR package
-    needs: [create-nightly-release, build]
+    needs: [create-release, build]
     runs-on: ubuntu-22.04
     if: github.repository == 'ruffle-rs/ruffle'
     steps:
@@ -565,7 +565,7 @@ jobs:
           format: YYYY.MM.DD
 
       - name: Download package
-        run: gh release download "${{ needs.create-nightly-release.outputs.tag_name }}" --pattern "${{ needs.create-nightly-release.outputs.package_prefix }}-linux-x86_64.tar.gz"
+        run: gh release download "${{ needs.create-release.outputs.tag_name }}" --pattern "${{ needs.create-release.outputs.package_prefix }}-linux-x86_64.tar.gz"
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -573,7 +573,7 @@ jobs:
         run: >
           sed -i ./PKGBUILD
           -e "s/@VERSION@/${{ steps.current_time_dots.outputs.formattedTime }}/"
-          -e "s/@SHA512SUM@/$(sha512sum ${{ needs.create-nightly-release.outputs.package_prefix }}-linux-x86_64.tar.gz | cut -d' ' -f1)/"
+          -e "s/@SHA512SUM@/$(sha512sum ${{ needs.create-release.outputs.package_prefix }}-linux-x86_64.tar.gz | cut -d' ' -f1)/"
 
       - name: Publish AUR package
         uses: KSXGitHub/github-actions-deploy-aur@v2.7.2
