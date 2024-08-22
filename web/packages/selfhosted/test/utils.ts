@@ -206,3 +206,38 @@ export function loadJsAPI(swf?: string) {
         }
     });
 }
+
+// TODO: After https://github.com/webdriverio/webdriverio/issues/13218 is fixed,
+// use `browser.$("<ruffle-object />").waitForExist()` at all call sites instead.
+export async function waitForRuffleObjectInTestFrame(
+    browser: WebdriverIO.Browser,
+) {
+    await browser
+        .$(
+            () =>
+                (
+                    document.querySelector("#test-frame") as
+                        | HTMLIFrameElement
+                        | HTMLFrameElement
+                ).contentDocument?.body.querySelector(
+                    "ruffle-object",
+                ) as HTMLElement,
+        )
+        .waitForExist();
+}
+
+// TODO: After https://github.com/webdriverio/webdriverio/issues/13218 is fixed, use
+// `browser.$("#test-container").getHTML({ includeSelectorTag: false, pierceShadowRoot: false })`
+// at all call sites instead.
+export async function getContainerHTMLFromTestFrame(
+    browser: WebdriverIO.Browser,
+) {
+    return await browser.execute(() => {
+        const el = (
+            document.querySelector("#test-frame") as
+                | HTMLIFrameElement
+                | HTMLFrameElement
+        ).contentDocument?.body.querySelector("#test-container");
+        return el?.innerHTML;
+    });
+}
