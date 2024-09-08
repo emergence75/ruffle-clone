@@ -30,7 +30,7 @@ fn instance_init<'gc>(
 }
 
 /// Implements `Boolean`'s native instance initializer.
-fn native_instance_init<'gc>(
+fn super_init<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Object<'gc>,
     args: &[Value<'gc>],
@@ -58,7 +58,8 @@ fn class_init<'gc>(
             Method::from_builtin(to_string, "toString", gc_context),
             scope,
             None,
-            Some(this_class),
+            None,
+            None,
         )
         .into(),
         activation,
@@ -70,7 +71,8 @@ fn class_init<'gc>(
             Method::from_builtin(value_of, "valueOf", gc_context),
             scope,
             None,
-            Some(this_class),
+            None,
+            None,
         )
         .into(),
         activation,
@@ -134,22 +136,18 @@ pub fn create_class<'gc>(activation: &mut Activation<'_, 'gc>) -> Class<'gc> {
     let mc = activation.context.gc_context;
     let class = Class::new(
         QName::new(activation.avm2().public_namespace_base_version, "Boolean"),
-        Some(activation.avm2().classes().object.inner_class_definition()),
+        Some(activation.avm2().class_defs().object),
         Method::from_builtin(instance_init, "<Boolean instance initializer>", mc),
         Method::from_builtin(class_init, "<Boolean class initializer>", mc),
-        activation.avm2().classes().class.inner_class_definition(),
+        activation.avm2().class_defs().class,
         mc,
     );
 
     class.set_attributes(mc, ClassAttributes::FINAL | ClassAttributes::SEALED);
     class.set_instance_allocator(mc, primitive_allocator);
-    class.set_native_instance_init(
+    class.set_super_init(
         mc,
-        Method::from_builtin(
-            native_instance_init,
-            "<Boolean native instance initializer>",
-            mc,
-        ),
+        Method::from_builtin(super_init, "<Boolean native instance initializer>", mc),
     );
     class.set_call_handler(
         mc,

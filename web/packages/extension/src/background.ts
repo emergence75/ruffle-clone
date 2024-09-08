@@ -189,11 +189,17 @@ async function enable() {
                     "https://*.edgenuity.com/*",
                 ],
                 runAt: "document_start",
+                allFrames: true,
                 world: "MAIN",
             },
             {
                 id: "4399",
-                matches: ["https://www.4399.com/flash/*"],
+                matches: [
+                    "*://www.4399.com/flash/*",
+                    "https://my.4399.com/*",
+                    "https://news.4399.com/qiu/",
+                    "http://sjsj.4399.com/",
+                ],
                 js: ["dist/siteContentScript4399.js"],
                 world: "MAIN",
                 runAt: "document_start",

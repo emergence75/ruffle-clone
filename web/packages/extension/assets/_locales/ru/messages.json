@@ -11,6 +11,9 @@
     "settings_autostart": {
         "message": "Воспроизводить автоматически без отображения заставки"
     },
+    "settings_swf_takeover": {
+        "message": "Проигрывать SWF файлы в браузере вместо их загрузки"
+    },
     "settings_log_level": {
         "message": "Уровень логирования"
     },
@@ -106,5 +109,8 @@
     },
     "grant_single_site_permission": {
         "message": "Постоянно включено для этого сайта"
+    },
+    "swf_player_permissions": {
+        "message": "Вам надо предоставить разрешение этому URL-адресу на загрузку SWF-файлов с него."
     }
 }

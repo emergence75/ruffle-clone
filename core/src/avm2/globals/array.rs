@@ -133,7 +133,8 @@ pub fn class_init<'gc>(
                 Method::from_builtin(*method, name, gc_context),
                 scope,
                 None,
-                Some(this_class),
+                None,
+                None,
             )
             .into(),
             activation,
@@ -1246,10 +1247,10 @@ pub fn create_class<'gc>(activation: &mut Activation<'_, 'gc>) -> Class<'gc> {
     let mc = activation.context.gc_context;
     let class = Class::new(
         QName::new(activation.avm2().public_namespace_base_version, "Array"),
-        Some(activation.avm2().classes().object.inner_class_definition()),
+        Some(activation.avm2().class_defs().object),
         Method::from_builtin(instance_init, "<Array instance initializer>", mc),
         Method::from_builtin(class_init, "<Array class initializer>", mc),
-        activation.avm2().classes().class.inner_class_definition(),
+        activation.avm2().class_defs().class,
         mc,
     );
 

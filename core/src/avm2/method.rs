@@ -165,7 +165,7 @@ impl<'gc> BytecodeMethod<'gc> {
     ) -> Result<Self, Error<'gc>> {
         let abc = txunit.abc();
         let mut signature = Vec::new();
-        let mut return_type = Multiname::any(activation.gc());
+        let mut return_type = Multiname::any();
 
         if abc.methods.get(abc_method.0 as usize).is_some() {
             let method = &abc.methods[abc_method.0 as usize];
@@ -240,11 +240,14 @@ impl<'gc> BytecodeMethod<'gc> {
     }
 
     #[inline(never)]
-    pub fn verify(&self, activation: &mut Activation<'_, 'gc>) -> Result<(), Error<'gc>> {
+    pub fn verify(
+        this: Gc<'gc, BytecodeMethod<'gc>>,
+        activation: &mut Activation<'_, 'gc>,
+    ) -> Result<(), Error<'gc>> {
         // TODO: avmplus seems to eaglerly verify some methods
 
-        *self.verified_info.write(activation.context.gc_context) =
-            Some(crate::avm2::verify::verify_method(activation, self)?);
+        *this.verified_info.write(activation.context.gc_context) =
+            Some(crate::avm2::verify::verify_method(activation, this)?);
 
         Ok(())
     }
@@ -426,7 +429,7 @@ impl<'gc> Method<'gc> {
                 signature: Vec::new(),
                 resolved_signature: GcCell::new(mc, None),
                 // FIXME - take in the real return type. This is needed for 'describeType'
-                return_type: Multiname::any(mc),
+                return_type: Multiname::any(),
                 is_variadic: true,
             },
         ))

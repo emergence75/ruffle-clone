@@ -3,12 +3,12 @@ use crate::gui::{GuiController, MENU_HEIGHT};
 use crate::player::{LaunchOptions, PlayerController};
 use crate::preferences::GlobalPreferences;
 use crate::util::{
-    get_screen_size, gilrs_button_to_gamepad_button, parse_url, pick_file, plot_stats_in_tracy,
+    get_screen_size, gilrs_button_to_gamepad_button, parse_url, plot_stats_in_tracy,
     winit_to_ruffle_key_code, winit_to_ruffle_text_control,
 };
 use anyhow::{Context, Error};
 use gilrs::{Event, EventType, Gilrs};
-use ruffle_core::{PlayerEvent, StageDisplayState};
+use ruffle_core::PlayerEvent;
 use ruffle_render::backend::ViewportDimensions;
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -120,7 +120,6 @@ impl App {
         let mut next_frame_time = None;
         let mut minimized = false;
         let mut modifiers = Modifiers::default();
-        let mut fullscreen_down = false;
 
         if self.initial_movie_url.is_none() {
             // No SWF provided on command line; show window with dummy movie immediately.
@@ -136,6 +135,7 @@ impl App {
 
         // Poll UI events.
         let event_loop = self.event_loop.take().expect("App already running");
+        let event_loop_proxy = event_loop.create_proxy();
         event_loop.run(move |event, elwt| {
             let mut check_redraw = false;
             match event {
@@ -332,47 +332,14 @@ impl App {
                                 return;
                             }
 
-                            // Handle fullscreen keyboard shortcuts: Alt+Return, Escape.
-                            match event {
-                                KeyEvent {
-                                    state: ElementState::Pressed,
-                                    logical_key: Key::Named(NamedKey::Enter),
-                                    ..
-                                } if modifiers.state().alt_key() => {
-                                    if !fullscreen_down {
-                                        if let Some(mut player) = self.player.get() {
-                                            player.update(|uc| {
-                                                uc.stage.toggle_display_state(uc);
-                                            });
-                                        }
-                                    }
-                                    fullscreen_down = true;
-                                    return;
-                                }
-                                KeyEvent {
-                                    state: ElementState::Released,
-                                    logical_key: Key::Named(NamedKey::Enter),
-                                    ..
-                                } if fullscreen_down => {
-                                    fullscreen_down = false;
-                                }
-                                KeyEvent {
-                                    state: ElementState::Pressed,
-                                    logical_key: Key::Named(NamedKey::Escape),
-                                    ..
-                                } => {
-                                    if let Some(mut player) = self.player.get() {
-                                        if player.is_playing() {
-                                            player.update(|uc| {
-                                                uc.stage.set_display_state(
-                                                    uc,
-                                                    StageDisplayState::Normal,
-                                                );
-                                            })
-                                        }
-                                    }
-                                }
-                                _ => (),
+                            // Handle escaping from fullscreen.
+                            if let KeyEvent {
+                                state: ElementState::Pressed,
+                                logical_key: Key::Named(NamedKey::Escape),
+                                ..
+                            } = event
+                            {
+                                let _ = event_loop_proxy.send_event(RuffleEvent::ExitFullScreen);
                             }
 
                             let key_code = winit_to_ruffle_key_code(&event);
@@ -514,24 +481,48 @@ impl App {
                 }
 
                 winit::event::Event::UserEvent(RuffleEvent::BrowseAndOpen(options)) => {
-                    if let Some(url) =
-                        pick_file(false, None).and_then(|p| Url::from_file_path(p).ok())
-                    {
-                        self.gui
-                            .borrow_mut()
-                            .create_movie(&mut self.player, *options, url);
-                    }
+                    let event_loop = event_loop_proxy.clone();
+                    let picker = self.gui.borrow().file_picker();
+                    tokio::spawn(async move {
+                        if let Some(url) = picker
+                            .pick_file(None)
+                            .await
+                            .and_then(|p| Url::from_file_path(p).ok())
+                        {
+                            let _ = event_loop.send_event(RuffleEvent::Open(url, options));
+                        }
+                    });
                 }
 
-                winit::event::Event::UserEvent(RuffleEvent::OpenURL(url, options)) => {
+                winit::event::Event::UserEvent(RuffleEvent::Open(url, options)) => {
                     self.gui
                         .borrow_mut()
                         .create_movie(&mut self.player, *options, url);
                 }
 
+                winit::event::Event::UserEvent(RuffleEvent::OpenDialog(descriptor)) => {
+                    self.gui.borrow_mut().open_dialog(descriptor);
+                }
+
                 winit::event::Event::UserEvent(RuffleEvent::CloseFile) => {
                     self.window.set_title("Ruffle"); // Reset title since file has been closed.
                     self.player.destroy();
+                }
+
+                winit::event::Event::UserEvent(RuffleEvent::EnterFullScreen) => {
+                    if let Some(mut player) = self.player.get() {
+                        if player.is_playing() {
+                            player.set_fullscreen(true);
+                        }
+                    }
+                }
+
+                winit::event::Event::UserEvent(RuffleEvent::ExitFullScreen) => {
+                    if let Some(mut player) = self.player.get() {
+                        if player.is_playing() {
+                            player.set_fullscreen(false);
+                        }
+                    }
                 }
 
                 winit::event::Event::UserEvent(RuffleEvent::ExitRequested) => {

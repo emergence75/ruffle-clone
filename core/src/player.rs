@@ -768,31 +768,29 @@ impl Player {
     fn get_context_menu_display_object<'gc>(
         context: &mut UpdateContext<'gc>,
     ) -> Option<DisplayObject<'gc>> {
-        let mut display_object = run_mouse_pick(context, false).map(|obj| obj.as_displayobject());
-        loop {
-            if let Some(disp_obj) = display_object {
-                if disp_obj.hit_test_shape(
-                    context,
-                    *context.mouse_position,
-                    HitTestOptions::MOUSE_PICK,
-                ) {
-                    if let Some(Value::Object(obj)) = Some(disp_obj).map(|obj| obj.object()) {
-                        let mut activation = Activation::from_stub(
-                            context,
-                            ActivationIdentifier::root("[ContextMenu]"),
-                        );
+        let mut picked_obj =
+            run_mouse_pick(context, false).map(|picked_obj| picked_obj.as_displayobject());
 
-                        if let Ok(Value::Object(_)) = obj.get("menu", &mut activation) {
-                            return Some(disp_obj);
-                        }
-                    }
+        while let Some(display_obj) = picked_obj {
+            if let Value::Object(obj) = display_obj.object() {
+                let mut activation =
+                    Activation::from_stub(context, ActivationIdentifier::root("[ContextMenu]"));
+
+                if let Ok(Value::Object(_)) = obj.get("menu", &mut activation) {
+                    return Some(display_obj);
                 }
-
-                display_object = disp_obj.parent();
-            } else {
-                return context.stage.root_clip();
             }
+
+            picked_obj = display_obj.parent();
         }
+
+        context.stage.root_clip()
+    }
+
+    pub fn is_fullscreen(&mut self) -> bool {
+        self.mutate_with_update_context(|context| {
+            context.stage.display_state() != StageDisplayState::Normal
+        })
     }
 
     pub fn set_fullscreen(&mut self, is_fullscreen: bool) {
@@ -1051,8 +1049,8 @@ impl Player {
                 PlayerEvent::KeyDown {
                     key_code: KeyCode::V,
                     ..
-                } if self.input.is_key_down(KeyCode::Control)
-                    && self.input.is_key_down(KeyCode::Alt) =>
+                } if self.input.is_key_down(KeyCode::CONTROL)
+                    && self.input.is_key_down(KeyCode::ALT) =>
                 {
                     self.mutate_with_update_context(|context| {
                         let mut dumper = VariableDumper::new("  ");
@@ -1085,8 +1083,8 @@ impl Player {
                 PlayerEvent::KeyDown {
                     key_code: KeyCode::D,
                     ..
-                } if self.input.is_key_down(KeyCode::Control)
-                    && self.input.is_key_down(KeyCode::Alt) =>
+                } if self.input.is_key_down(KeyCode::CONTROL)
+                    && self.input.is_key_down(KeyCode::ALT) =>
                 {
                     self.mutate_with_update_context(|context| {
                         if context.avm1.show_debug_output() {
@@ -1107,8 +1105,8 @@ impl Player {
                 PlayerEvent::KeyDown {
                     key_code: KeyCode::F,
                     ..
-                } if self.input.is_key_down(KeyCode::Control)
-                    && self.input.is_key_down(KeyCode::Alt) =>
+                } if self.input.is_key_down(KeyCode::CONTROL)
+                    && self.input.is_key_down(KeyCode::ALT) =>
                 {
                     self.mutate_with_update_context(|context| {
                         context.stage.display_render_tree(0);
@@ -1143,9 +1141,9 @@ impl Player {
             if let PlayerEvent::KeyDown { key_code, key_char }
             | PlayerEvent::KeyUp { key_code, key_char } = event
             {
-                let ctrl_key = context.input.is_key_down(KeyCode::Control);
-                let alt_key = context.input.is_key_down(KeyCode::Alt);
-                let shift_key = context.input.is_key_down(KeyCode::Shift);
+                let ctrl_key = context.input.is_key_down(KeyCode::CONTROL);
+                let alt_key = context.input.is_key_down(KeyCode::ALT);
+                let shift_key = context.input.is_key_down(KeyCode::SHIFT);
 
                 let mut activation = Avm2Activation::from_nothing(context);
 
@@ -1170,7 +1168,7 @@ impl Player {
                             true.into(),                             /* bubbles */
                             false.into(),                            /* cancelable */
                             key_char.map_or(0, |c| c as u32).into(), /* charCode */
-                            (key_code as u32).into(),                /* keyCode */
+                            key_code.value().into(),                 /* keyCode */
                             0.into(),                                /* keyLocation */
                             ctrl_key.into(),                         /* ctrlKey */
                             alt_key.into(),                          /* altKey */
@@ -1296,11 +1294,11 @@ impl Player {
             // KeyPress events also take precedence over tabbing.
             if !key_press_handled {
                 if let PlayerEvent::KeyDown {
-                    key_code: KeyCode::Tab,
+                    key_code: KeyCode::TAB,
                     ..
                 } = event
                 {
-                    let reversed = context.input.is_key_down(KeyCode::Shift);
+                    let reversed = context.input.is_key_down(KeyCode::SHIFT);
                     let tracker = context.focus_tracker;
                     tracker.cycle(context, reversed);
                 }
@@ -1313,7 +1311,7 @@ impl Player {
                     if matches!(
                         event,
                         PlayerEvent::KeyDown {
-                            key_code: KeyCode::Return,
+                            key_code: KeyCode::RETURN,
                             ..
                         } | PlayerEvent::TextInput { codepoint: ' ' }
                     ) {

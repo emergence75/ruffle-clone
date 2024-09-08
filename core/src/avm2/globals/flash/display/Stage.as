@@ -10,13 +10,13 @@ package flash.display {
     import flash.text.TextSnapshot;
     import flash.ui.ContextMenu;
 
-    [Ruffle(NativeInstanceInit)]
+    [Ruffle(SuperInitializer)]
     public class Stage extends DisplayObjectContainer {
         private var _colorCorrection:String = ColorCorrection.DEFAULT;
         private var _mouseLock:Boolean = false;
 
         public function Stage() {
-            throw new Error("You cannot construct new instances of the Stage.")
+            throw new Error("You cannot construct new instances of the Stage.");
         }
 
         override public function set accessibilityProperties(value:AccessibilityProperties):void {
@@ -192,11 +192,15 @@ package flash.display {
         public native function get align():String;
         public native function set align(value:String):void;
 
+        [API("700")]
         public native function get browserZoomFactor():Number;
 
+        [API("670")]
         public native function get color():uint;
+        [API("670")]
         public native function set color(value:uint):void;
 
+        [API("682")]
         public native function get contentsScaleFactor():Number;
 
         public native function get displayState():String;
@@ -238,13 +242,16 @@ package flash.display {
             return new Rectangle(0, 0, 0, 0);
         }
 
+        [API("670")]
         public native function get allowsFullScreen():Boolean;
 
+        [API("680")]
         public native function get allowsFullScreenInteractive():Boolean;
 
         public native function get quality():String;
         public native function set quality(value:String):void;
 
+        [API("674")]
         public native function get stage3Ds():Vector.<Stage3D>;
 
         public native function invalidate():void;
@@ -263,11 +270,13 @@ package flash.display {
             return ColorCorrectionSupport.UNSUPPORTED;
         }
 
+        [API("678")]
         public function get mouseLock():Boolean {
             stub_getter("flash.display.Stage", "mouseLock");
             return this._mouseLock;
         }
 
+        [API("678")]
         public function set mouseLock(value:Boolean):void {
             stub_setter("flash.display.Stage", "mouseLock");
             this._mouseLock = value;

@@ -23,6 +23,8 @@ use winit::event_loop::EventLoop;
 use winit::keyboard::{Key, NamedKey};
 use winit::window::{Theme, Window};
 
+use super::{DialogDescriptor, FilePicker};
+
 /// Integration layer connecting wgpu+winit to egui.
 pub struct GuiController {
     descriptors: Arc<Descriptors>,
@@ -112,6 +114,7 @@ impl GuiController {
             egui_wgpu::Renderer::new(&descriptors.device, surface_format, None, 1, true);
         let descriptors = Arc::new(descriptors);
         let gui = RuffleGui::new(
+            Arc::downgrade(&window),
             event_loop,
             initial_movie_url.clone(),
             LaunchOptions::from(&preferences),
@@ -146,6 +149,10 @@ impl GuiController {
 
     pub fn descriptors(&self) -> &Arc<Descriptors> {
         &self.descriptors
+    }
+
+    pub fn file_picker(&self) -> FilePicker {
+        self.gui.dialogs.file_picker()
     }
 
     pub fn resize(&mut self, size: PhysicalSize<u32>) {
@@ -388,6 +395,10 @@ impl GuiController {
 
     pub fn show_open_dialog(&mut self) {
         self.gui.dialogs.open_file_advanced()
+    }
+
+    pub fn open_dialog(&mut self, dialog_event: DialogDescriptor) {
+        self.gui.dialogs.open_dialog(dialog_event);
     }
 }
 
