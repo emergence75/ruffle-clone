@@ -11,6 +11,7 @@ use ruffle_core::backend::storage::{MemoryStorageBackend, StorageBackend};
 use ruffle_core::backend::ui::FontDefinition;
 use ruffle_core::compatibility_rules::CompatibilityRules;
 use ruffle_core::config::{Letterbox, NetworkingAccessMode};
+use ruffle_core::events::{GamepadButton, KeyCode};
 use ruffle_core::ttf_parser;
 use ruffle_core::{
     swf, Color, DefaultFont, Player, PlayerBuilder, PlayerRuntime, StageAlign, StageScaleMode,
@@ -658,6 +659,12 @@ impl RuffleInstanceBuilder {
             .with_scale_mode(self.scale, self.force_scale)
             .with_frame_rate(self.frame_rate)
             .with_page_url(window.location().href().ok())
+            .with_gamepad_button_mapping(HashMap::from([
+                (GamepadButton::DPadUp, KeyCode::UP),
+                (GamepadButton::DPadDown, KeyCode::DOWN),
+                (GamepadButton::DPadLeft, KeyCode::LEFT),
+                (GamepadButton::DPadRight, KeyCode::RIGHT),
+            ]))
             .build();
 
         let player_weak = Arc::downgrade(&core);
