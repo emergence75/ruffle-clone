@@ -8,7 +8,7 @@ use crate::avm2::scope::ScopeChain;
 use crate::avm2::traits::{Trait, TraitKind};
 use crate::avm2::value::Value;
 use crate::avm2::{Class, Error, Multiname, Namespace, QName};
-use crate::string::AvmString;
+use crate::string::{AvmString, StringContext};
 use gc_arena::{Collect, GcCell, Mutation};
 use std::cell::Ref;
 use std::collections::HashMap;
@@ -112,13 +112,17 @@ impl<'gc> VTable<'gc> {
         self.0.read().disp_metadata_table.get(disp_id).cloned()
     }
 
-    pub fn slot_class_name(&self, slot_id: u32) -> Result<Multiname<'gc>, Error<'gc>> {
+    pub fn slot_class_name(
+        &self,
+        context: &mut StringContext<'gc>,
+        slot_id: u32,
+    ) -> Result<AvmString<'gc>, Error<'gc>> {
         self.0
             .read()
             .slot_classes
             .get(slot_id as usize)
             .ok_or_else(|| "Invalid slot ID".into())
-            .map(|c| c.get_name())
+            .map(|c| c.get_name(context))
     }
 
     pub fn get_trait(self, name: &Multiname<'gc>) -> Option<Property> {
@@ -456,13 +460,13 @@ impl<'gc> VTable<'gc> {
                             type_name, unit, ..
                         } => (
                             Property::new_slot(new_slot_id),
-                            PropertyClass::name(mc, type_name.clone(), *unit),
+                            PropertyClass::name(*type_name, *unit),
                         ),
                         TraitKind::Const {
                             type_name, unit, ..
                         } => (
                             Property::new_const_slot(new_slot_id),
-                            PropertyClass::name(mc, type_name.clone(), *unit),
+                            PropertyClass::name(*type_name, *unit),
                         ),
                         TraitKind::Class { class, .. } => (
                             Property::new_const_slot(new_slot_id),

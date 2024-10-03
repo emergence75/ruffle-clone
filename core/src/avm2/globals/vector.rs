@@ -764,6 +764,8 @@ pub fn slice<'gc>(
 }
 
 /// Implements `Vector.sort`
+///
+/// TODO: Consider sharing this code with `globals::array::sort`?
 pub fn sort<'gc>(
     activation: &mut Activation<'_, 'gc>,
     this: Object<'gc>,
@@ -813,21 +815,18 @@ pub fn sort<'gc>(
         drop(vs);
 
         let mut unique_sort_satisfied = true;
-        let mut error_signal = Ok(());
-        values.sort_unstable_by(|a, b| match compare(activation, *a, *b) {
-            Ok(Ordering::Equal) => {
-                unique_sort_satisfied = false;
-                Ordering::Equal
-            }
-            Ok(v) if options.contains(SortOptions::DESCENDING) => v.reverse(),
-            Ok(v) => v,
-            Err(e) => {
-                error_signal = Err(e);
-                Ordering::Less
-            }
-        });
-
-        error_signal?;
+        super::array::qsort(&mut values, &mut |a, b| {
+            compare(activation, *a, *b).map(|cmp| {
+                if cmp == Ordering::Equal {
+                    unique_sort_satisfied = false;
+                    Ordering::Equal
+                } else if options.contains(SortOptions::DESCENDING) {
+                    cmp.reverse()
+                } else {
+                    cmp
+                }
+            })
+        })?;
 
         //NOTE: RETURNINDEXEDARRAY does NOT actually return anything useful.
         //The actual sorting still happens, but the results are discarded.
@@ -900,7 +899,7 @@ pub fn splice<'gc>(
 pub fn create_generic_class<'gc>(activation: &mut Activation<'_, 'gc>) -> Class<'gc> {
     let mc = activation.context.gc_context;
     let class = Class::new(
-        QName::new(activation.avm2().vector_public_namespace, "Vector"),
+        QName::new(activation.avm2().namespaces.vector_public, "Vector"),
         Some(activation.avm2().class_defs().object),
         Method::from_builtin(generic_init, "<Vector instance initializer>", mc),
         Method::from_builtin(generic_init, "<Vector class initializer>", mc),
@@ -931,18 +930,16 @@ pub fn create_builtin_class<'gc>(
     activation: &mut Activation<'_, 'gc>,
     param: Option<Class<'gc>>,
 ) -> Class<'gc> {
-    let mc = activation.context.gc_context;
+    let mc = activation.gc();
+    let namespaces = activation.avm2().namespaces;
 
     // FIXME - we should store a `Multiname` instead of a `QName`, and use the
     // `params` field. For now, this is good enough to get tests passing
     let name = if let Some(param) = param {
         let name = format!("Vector.<{}>", param.name().to_qualified_name(mc));
-        QName::new(
-            activation.avm2().vector_public_namespace,
-            AvmString::new_utf8(mc, name),
-        )
+        QName::new(namespaces.vector_public, AvmString::new_utf8(mc, name))
     } else {
-        QName::new(activation.avm2().vector_public_namespace, "Vector.<*>")
+        QName::new(namespaces.vector_public, "Vector.<*>")
     };
 
     let class = Class::new(
@@ -976,7 +973,7 @@ pub fn create_builtin_class<'gc>(
     ];
     class.define_builtin_instance_properties(
         mc,
-        activation.avm2().public_namespace_base_version,
+        namespaces.public_all(),
         PUBLIC_INSTANCE_PROPERTIES,
     );
 
@@ -1003,11 +1000,7 @@ pub fn create_builtin_class<'gc>(
         ("sort", sort),
         ("splice", splice),
     ];
-    class.define_builtin_instance_methods(
-        mc,
-        activation.avm2().as3_namespace,
-        AS3_INSTANCE_METHODS,
-    );
+    class.define_builtin_instance_methods(mc, namespaces.as3, AS3_INSTANCE_METHODS);
 
     class.mark_traits_loaded(activation.context.gc_context);
     class

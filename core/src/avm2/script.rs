@@ -14,8 +14,8 @@ use crate::avm2::vtable::VTable;
 use crate::avm2::Multiname;
 use crate::avm2::Namespace;
 use crate::avm2::{Avm2, Error};
-use crate::context::{GcContext, UpdateContext};
-use crate::string::{AvmAtom, AvmString};
+use crate::context::UpdateContext;
+use crate::string::{AvmAtom, AvmString, StringContext};
 use crate::tag_utils::SwfMovie;
 use crate::PlayerRuntime;
 use gc_arena::{Collect, Gc, GcCell, Mutation};
@@ -276,7 +276,7 @@ impl<'gc> TranslationUnit<'gc> {
     pub fn pool_string_option(
         self,
         string_index: u32,
-        context: &mut GcContext<'_, 'gc>,
+        context: &mut StringContext<'gc>,
     ) -> Result<Option<AvmAtom<'gc>>, Error<'gc>> {
         if string_index == 0 {
             Ok(None)
@@ -294,7 +294,7 @@ impl<'gc> TranslationUnit<'gc> {
     pub fn pool_string(
         self,
         string_index: u32,
-        context: &mut GcContext<'_, 'gc>,
+        context: &mut StringContext<'gc>,
     ) -> Result<AvmAtom<'gc>, Error<'gc>> {
         let mut write = self.0.write(context.gc_context);
         if let Some(Some(atom)) = write.strings.get(string_index as usize) {
@@ -313,10 +313,7 @@ impl<'gc> TranslationUnit<'gc> {
                 .as_slice()
         };
 
-        let atom = context
-            .interner
-            .intern_wstr(context.gc_context, ruffle_wstr::from_utf8_bytes(raw));
-
+        let atom = context.intern_wstr(ruffle_wstr::from_utf8_bytes(raw));
         write.strings[string_index as usize] = Some(atom);
         Ok(atom)
     }
@@ -327,9 +324,10 @@ impl<'gc> TranslationUnit<'gc> {
     /// This version of the function treats index 0 as an error condition.
     pub fn pool_namespace(
         self,
+        activation: &mut Activation<'_, 'gc>,
         ns_index: Index<AbcNamespace>,
-        context: &mut UpdateContext<'gc>,
     ) -> Result<Namespace<'gc>, Error<'gc>> {
+        let mc = activation.gc();
         let read = self.0.read();
         if let Some(Some(namespace)) = read.namespaces.get(ns_index.0 as usize) {
             return Ok(*namespace);
@@ -337,8 +335,8 @@ impl<'gc> TranslationUnit<'gc> {
 
         drop(read);
 
-        let namespace = Namespace::from_abc_namespace(self, ns_index, context)?;
-        self.0.write(context.gc_context).namespaces[ns_index.0 as usize] = Some(namespace);
+        let namespace = Namespace::from_abc_namespace(activation, self, ns_index)?;
+        self.0.write(mc).namespaces[ns_index.0 as usize] = Some(namespace);
 
         Ok(namespace)
     }
@@ -347,10 +345,10 @@ impl<'gc> TranslationUnit<'gc> {
     /// The name can have a lazy component, do not pass it anywhere.
     pub fn pool_maybe_uninitialized_multiname(
         self,
+        activation: &mut Activation<'_, 'gc>,
         multiname_index: Index<AbcMultiname>,
-        context: &mut UpdateContext<'gc>,
     ) -> Result<Gc<'gc, Multiname<'gc>>, Error<'gc>> {
-        let mc = context.gc_context;
+        let mc = activation.gc();
         let read = self.0.read();
         if let Some(Some(multiname)) = read.multinames.get(multiname_index.0 as usize) {
             return Ok(*multiname);
@@ -358,7 +356,7 @@ impl<'gc> TranslationUnit<'gc> {
 
         drop(read);
 
-        let multiname = Multiname::from_abc_index(self, multiname_index, context)?;
+        let multiname = Multiname::from_abc_index(activation, self, multiname_index)?;
         let multiname = Gc::new(mc, multiname);
         self.0.write(mc).multinames[multiname_index.0 as usize] = Some(multiname);
 
@@ -371,10 +369,10 @@ impl<'gc> TranslationUnit<'gc> {
     /// This version of the function treats index 0 as an error condition.
     pub fn pool_multiname_static(
         self,
+        activation: &mut Activation<'_, 'gc>,
         multiname_index: Index<AbcMultiname>,
-        context: &mut UpdateContext<'gc>,
     ) -> Result<Gc<'gc, Multiname<'gc>>, Error<'gc>> {
-        let multiname = self.pool_maybe_uninitialized_multiname(multiname_index, context)?;
+        let multiname = self.pool_maybe_uninitialized_multiname(activation, multiname_index)?;
         if multiname.has_lazy_component() {
             return Err(format!("Multiname {} is not static", multiname_index.0).into());
         }
@@ -385,17 +383,17 @@ impl<'gc> TranslationUnit<'gc> {
     /// Retrieve a static, or non-runtime, multiname from the current constant
     /// pool.
     ///
-    /// This version of the function treats index 0 as the any-type `*`.
+    /// This version of the function returns None for index 0.
     pub fn pool_multiname_static_any(
         self,
+        activation: &mut Activation<'_, 'gc>,
         multiname_index: Index<AbcMultiname>,
-        context: &mut UpdateContext<'gc>,
-    ) -> Result<Gc<'gc, Multiname<'gc>>, Error<'gc>> {
+    ) -> Result<Option<Gc<'gc, Multiname<'gc>>>, Error<'gc>> {
         if multiname_index.0 == 0 {
-            let mc = context.gc_context;
-            Ok(Gc::new(mc, Multiname::any()))
+            Ok(None)
         } else {
-            self.pool_multiname_static(multiname_index, context)
+            self.pool_multiname_static(activation, multiname_index)
+                .map(Some)
         }
     }
 }

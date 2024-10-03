@@ -521,7 +521,7 @@ pub fn abc_default_value<'gc>(
         AbcDefaultValue::Uint(u) => abc_uint(translation_unit, *u).map(|v| v.into()),
         AbcDefaultValue::Double(d) => abc_double(translation_unit, *d).map(|v| v.into()),
         AbcDefaultValue::String(s) => translation_unit
-            .pool_string(s.0, &mut activation.borrow_gc())
+            .pool_string(s.0, activation.strings())
             .map(Into::into),
         AbcDefaultValue::True => Ok(true.into()),
         AbcDefaultValue::False => Ok(false.into()),
@@ -534,7 +534,7 @@ pub fn abc_default_value<'gc>(
         | AbcDefaultValue::Explicit(ns)
         | AbcDefaultValue::StaticProtected(ns)
         | AbcDefaultValue::Private(ns) => {
-            let ns = translation_unit.pool_namespace(*ns, activation.context)?;
+            let ns = translation_unit.pool_namespace(activation, *ns)?;
             NamespaceObject::from_namespace(activation, ns).map(Into::into)
         }
     }
@@ -839,10 +839,7 @@ impl<'gc> Value<'gc> {
             }
             Value::Integer(i) => {
                 if *i >= 0 && *i < 10 {
-                    activation
-                        .context
-                        .interner
-                        .get_char(activation.context.gc_context, '0' as u16 + *i as u16)
+                    activation.strings().make_char('0' as u16 + *i as u16)
                 } else {
                     AvmString::new_utf8(activation.context.gc_context, i.to_string())
                 }
@@ -990,19 +987,19 @@ impl<'gc> Value<'gc> {
         activation: &mut Activation<'_, 'gc>,
         class: Class<'gc>,
     ) -> Result<Value<'gc>, Error<'gc>> {
-        if class == activation.avm2().classes().int.inner_class_definition() {
+        if class == activation.avm2().class_defs().int {
             return Ok(self.coerce_to_i32(activation)?.into());
         }
 
-        if class == activation.avm2().classes().uint.inner_class_definition() {
+        if class == activation.avm2().class_defs().uint {
             return Ok(self.coerce_to_u32(activation)?.into());
         }
 
-        if class == activation.avm2().classes().number.inner_class_definition() {
+        if class == activation.avm2().class_defs().number {
             return Ok(self.coerce_to_number(activation)?.into());
         }
 
-        if class == activation.avm2().classes().boolean.inner_class_definition() {
+        if class == activation.avm2().class_defs().boolean {
             return Ok(self.coerce_to_boolean().into());
         }
 
@@ -1013,7 +1010,7 @@ impl<'gc> Value<'gc> {
             return Ok(Value::Null);
         }
 
-        if class == activation.avm2().classes().string.inner_class_definition() {
+        if class == activation.avm2().class_defs().string {
             return Ok(self.coerce_to_string(activation)?.into());
         }
 
@@ -1093,13 +1090,13 @@ impl<'gc> Value<'gc> {
         activation: &mut Activation<'_, 'gc>,
         type_object: Class<'gc>,
     ) -> bool {
-        if type_object == activation.avm2().classes().number.inner_class_definition() {
+        if type_object == activation.avm2().class_defs().number {
             return self.is_number();
         }
-        if type_object == activation.avm2().classes().uint.inner_class_definition() {
+        if type_object == activation.avm2().class_defs().uint {
             return self.is_u32();
         }
-        if type_object == activation.avm2().classes().int.inner_class_definition() {
+        if type_object == activation.avm2().class_defs().int {
             return self.is_i32();
         }
 

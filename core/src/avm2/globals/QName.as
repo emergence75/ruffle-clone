@@ -2,9 +2,9 @@ package {
     [Ruffle(InstanceAllocator)]
     [Ruffle(CallHandler)]
     public final class QName {
-        public static const length = 2;
-        
-        public function QName(uri:* = undefined, localName:* = undefined) {
+        public static const length:* = 2;
+
+        public function QName(uri:* = void 0, localName:* = void 0) {
             this.init(arguments);
         }
 

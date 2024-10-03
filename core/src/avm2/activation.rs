@@ -20,8 +20,8 @@ use crate::avm2::value::Value;
 use crate::avm2::Multiname;
 use crate::avm2::Namespace;
 use crate::avm2::{Avm2, Error};
-use crate::context::{GcContext, UpdateContext};
-use crate::string::{AvmAtom, AvmString};
+use crate::context::UpdateContext;
+use crate::string::{AvmAtom, AvmString, StringContext};
 use crate::tag_utils::SwfMovie;
 use gc_arena::Gc;
 use smallvec::SmallVec;
@@ -152,6 +152,11 @@ impl<'a, 'gc> Activation<'a, 'gc> {
         self.context.gc_context
     }
 
+    #[inline(always)]
+    pub fn strings(&mut self) -> &mut StringContext<'gc> {
+        &mut self.context.strings
+    }
+
     /// Construct an activation that does not represent any particular scope.
     ///
     /// This exists primarily for non-AVM2 related manipulations of the
@@ -278,7 +283,7 @@ impl<'a, 'gc> Activation<'a, 'gc> {
 
         // Run verifier for bytecode methods
         if let Method::Bytecode(method) = method {
-            if method.verified_info.read().is_none() {
+            if method.verified_info.borrow().is_none() {
                 BytecodeMethod::verify(method, &mut created_activation)?;
             }
         }
@@ -449,11 +454,11 @@ impl<'a, 'gc> Activation<'a, 'gc> {
         self.max_scope_size = (body.max_scope_depth - body.init_scope_depth) as usize;
 
         // Everything is now setup for the verifier to run
-        if method.verified_info.read().is_none() {
+        if method.verified_info.borrow().is_none() {
             BytecodeMethod::verify(method, self)?;
         }
 
-        let verified_info = method.verified_info.read();
+        let verified_info = method.verified_info.borrow();
         let signature = &verified_info.as_ref().unwrap().param_config;
 
         if user_arguments.len() > signature.len() && !has_rest_or_args {
@@ -637,11 +642,6 @@ impl<'a, 'gc> Activation<'a, 'gc> {
         self.context.avm2
     }
 
-    #[inline]
-    pub fn borrow_gc(&mut self) -> GcContext<'_, 'gc> {
-        self.context.borrow_gc()
-    }
-
     pub fn scope_frame(&self) -> &[Scope<'gc>] {
         &self.context.avm2.scope_stack[self.scope_depth..]
     }
@@ -732,9 +732,7 @@ impl<'a, 'gc> Activation<'a, 'gc> {
         method: Gc<'gc, BytecodeMethod<'gc>>,
         index: Index<AbcNamespace>,
     ) -> Result<Namespace<'gc>, Error<'gc>> {
-        method
-            .translation_unit()
-            .pool_namespace(index, self.context)
+        method.translation_unit().pool_namespace(self, index)
     }
 
     /// Retrieve a method entry from the current ABC file's method table.
@@ -755,7 +753,7 @@ impl<'a, 'gc> Activation<'a, 'gc> {
     ) -> Result<Value<'gc>, Error<'gc>> {
         // The method must be verified at this point
 
-        let verified_info = method.verified_info.read();
+        let verified_info = method.verified_info.borrow();
         let verified_code = verified_info.as_ref().unwrap().parsed_code.as_slice();
 
         self.ip = 0;
@@ -786,7 +784,7 @@ impl<'a, 'gc> Activation<'a, 'gc> {
             Error::RustError(_) => return Err(error),
         };
 
-        let verified_info = method.verified_info.read();
+        let verified_info = method.verified_info.borrow();
         let exception_list = &verified_info.as_ref().unwrap().exceptions;
 
         // Use `coerce_to_object` so that we handle primitives correctly.
@@ -1598,7 +1596,7 @@ impl<'a, 'gc> Activation<'a, 'gc> {
         method: Gc<'gc, BytecodeMethod<'gc>>,
         index: Index<Exception>,
     ) -> Result<FrameControl<'gc>, Error<'gc>> {
-        let verified_info = method.verified_info.read();
+        let verified_info = method.verified_info.borrow();
         let exception_list = &verified_info.as_ref().unwrap().exceptions;
 
         let ex = &exception_list[index.0 as usize];
@@ -2026,8 +2024,8 @@ impl<'a, 'gc> Activation<'a, 'gc> {
     }
 
     fn op_check_filter(&mut self) -> Result<FrameControl<'gc>, Error<'gc>> {
-        let xml = self.avm2().classes().xml.inner_class_definition();
-        let xml_list = self.avm2().classes().xml_list.inner_class_definition();
+        let xml = self.avm2().class_defs().xml;
+        let xml_list = self.avm2().class_defs().xml_list;
         let value = self.pop_stack().coerce_to_object_or_typeerror(self, None)?;
 
         if value.is_of_type(xml) || value.is_of_type(xml_list) {
@@ -2748,11 +2746,11 @@ impl<'a, 'gc> Activation<'a, 'gc> {
             Value::Bool(_) => "boolean",
             Value::Number(_) | Value::Integer(_) => "number",
             Value::Object(o) => {
-                let classes = self.avm2().classes();
+                let classes = self.avm2().class_defs();
 
                 match o {
                     Object::FunctionObject(_) => {
-                        if o.instance_class() == classes.function.inner_class_definition() {
+                        if o.instance_class() == classes.function {
                             "function"
                         } else {
                             // Subclasses always have a typeof = "object"
@@ -2760,8 +2758,8 @@ impl<'a, 'gc> Activation<'a, 'gc> {
                         }
                     }
                     Object::XmlObject(_) | Object::XmlListObject(_) => {
-                        if o.instance_class() == classes.xml_list.inner_class_definition()
-                            || o.instance_class() == classes.xml.inner_class_definition()
+                        if o.instance_class() == classes.xml_list
+                            || o.instance_class() == classes.xml
                         {
                             "xml"
                         } else {

@@ -12,24 +12,24 @@ workspace = true
 
 [dependencies]
 clap = { workspace = true }
-cpal = "0.15.3"
+cpal = { workspace = true }
 egui = { workspace = true }
-egui_extras = { git = "https://github.com/emilk/egui.git", rev = "37b1e1504db14697c39ce1c3bb5e58f4f2b819bf", default-features = false, features = ["image"] }
-egui-wgpu = { git = "https://github.com/emilk/egui.git", rev = "37b1e1504db14697c39ce1c3bb5e58f4f2b819bf", features = ["winit"] }
+egui_extras = { version = "0.29.0", default-features = false, features = ["image"] }
+egui-wgpu = { version = "0.29.0", features = ["winit"] }
 image = { workspace = true, features = ["png"] }
-egui-winit = { git = "https://github.com/emilk/egui.git", rev = "37b1e1504db14697c39ce1c3bb5e58f4f2b819bf" }
-fontdb = "0.21"
+egui-winit = "0.29.0"
+fontdb = "0.22"
 ruffle_core = { path = "../core", features = ["audio", "clap", "mp3", "nellymoser", "default_compatibility_rules", "egui"] }
 ruffle_render = { path = "../render", features = ["clap"] }
 ruffle_render_wgpu = { path = "../render/wgpu", features = ["clap"] }
 ruffle_video_software = { path = "../video/software", optional = true }
-ruffle_video_external = { path = "../video/external", optional = true }
-ruffle_frontend_utils = { path = "../frontend-utils" }
+ruffle_video_external = { path = "../video/external", features = ["openh264"], optional = true }
+ruffle_frontend_utils = { path = "../frontend-utils", features = ["cpal"] }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 tracing-appender = "0.2.3"
-winit = "0.29.15"
-webbrowser = "1.0.1"
+winit = "0.30.5"
+webbrowser = "1.0.2"
 url = { workspace = true }
 dirs = "5.0"
 rfd = { workspace = true }
@@ -41,9 +41,9 @@ sys-locale = "0.3.1"
 wgpu = { workspace = true }
 futures = { workspace = true }
 chrono = { workspace = true }
-fluent-templates = "0.10.1"
-toml_edit = { version = "0.22.20", features = ["parse"] }
-gilrs = "0.10"
+fluent-templates = "0.11.0"
+toml_edit = { version = "0.22.22", features = ["parse"] }
+gilrs = "0.11"
 tokio = { workspace = true, features = ["rt-multi-thread", "macros"]}
 
 # Deliberately held back to match tracy client used by profiling crate

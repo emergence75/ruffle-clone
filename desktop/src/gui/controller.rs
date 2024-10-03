@@ -99,8 +99,14 @@ impl GuiController {
 
         let theme_controller =
             ThemeController::new(window.clone(), preferences.clone(), egui_ctx.clone()).await;
-        let mut egui_winit =
-            egui_winit::State::new(egui_ctx, ViewportId::ROOT, window.as_ref(), None, None);
+        let mut egui_winit = egui_winit::State::new(
+            egui_ctx,
+            ViewportId::ROOT,
+            window.as_ref(),
+            None,
+            None,
+            None,
+        );
         egui_winit.set_max_texture_side(descriptors.limits.max_texture_dimension_2d as usize);
 
         let movie_view_renderer = Arc::new(MovieViewRenderer::new(
@@ -347,18 +353,20 @@ impl GuiController {
         {
             let surface_view = surface_texture.texture.create_view(&Default::default());
 
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &surface_view,
-                    resolve_target: None,
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                        store: wgpu::StoreOp::Store,
-                    },
-                })],
-                label: Some("egui_render"),
-                ..Default::default()
-            });
+            let mut render_pass = encoder
+                .begin_render_pass(&wgpu::RenderPassDescriptor {
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &surface_view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    label: Some("egui_render"),
+                    ..Default::default()
+                })
+                .forget_lifetime();
 
             if let Some(movie_view) = movie_view {
                 movie_view.render(&self.movie_view_renderer, &mut render_pass);

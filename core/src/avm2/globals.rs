@@ -2,7 +2,6 @@ use crate::avm2::activation::Activation;
 use crate::avm2::api_version::ApiVersion;
 use crate::avm2::class::Class;
 use crate::avm2::domain::Domain;
-use crate::avm2::multiname::Multiname;
 use crate::avm2::object::{ClassObject, ScriptObject, TObject};
 use crate::avm2::scope::{Scope, ScopeChain};
 use crate::avm2::script::Script;
@@ -85,15 +84,6 @@ pub struct SystemClasses<'gc> {
     pub textfield: ClassObject<'gc>,
     pub textformat: ClassObject<'gc>,
     pub graphics: ClassObject<'gc>,
-    pub igraphicsdata: ClassObject<'gc>,
-    pub graphicsbitmapfill: ClassObject<'gc>,
-    pub graphicsendfill: ClassObject<'gc>,
-    pub graphicsgradientfill: ClassObject<'gc>,
-    pub graphicspath: ClassObject<'gc>,
-    pub graphicstrianglepath: ClassObject<'gc>,
-    pub graphicssolidfill: ClassObject<'gc>,
-    pub graphicsshaderfill: ClassObject<'gc>,
-    pub graphicsstroke: ClassObject<'gc>,
     pub loader: ClassObject<'gc>,
     pub loaderinfo: ClassObject<'gc>,
     pub bytearray: ClassObject<'gc>,
@@ -188,6 +178,29 @@ pub struct SystemClassDefs<'gc> {
     pub class: Class<'gc>,
     pub function: Class<'gc>,
     pub void: Class<'gc>,
+
+    pub array: Class<'gc>,
+    pub boolean: Class<'gc>,
+    pub int: Class<'gc>,
+    pub generic_vector: Class<'gc>,
+    pub namespace: Class<'gc>,
+    pub number: Class<'gc>,
+    pub string: Class<'gc>,
+    pub uint: Class<'gc>,
+    pub xml: Class<'gc>,
+    pub xml_list: Class<'gc>,
+
+    pub bitmap: Class<'gc>,
+    pub bitmapdata: Class<'gc>,
+    pub igraphicsdata: Class<'gc>,
+    pub graphicsbitmapfill: Class<'gc>,
+    pub graphicsendfill: Class<'gc>,
+    pub graphicsgradientfill: Class<'gc>,
+    pub graphicspath: Class<'gc>,
+    pub graphicstrianglepath: Class<'gc>,
+    pub graphicssolidfill: Class<'gc>,
+    pub graphicsshaderfill: Class<'gc>,
+    pub graphicsstroke: Class<'gc>,
 }
 
 impl<'gc> SystemClasses<'gc> {
@@ -203,6 +216,7 @@ impl<'gc> SystemClasses<'gc> {
             object,
             function,
             class,
+
             // temporary initialization
             string: object,
             boolean: object,
@@ -225,15 +239,6 @@ impl<'gc> SystemClasses<'gc> {
             textfield: object,
             textformat: object,
             graphics: object,
-            igraphicsdata: object,
-            graphicsbitmapfill: object,
-            graphicsendfill: object,
-            graphicsgradientfill: object,
-            graphicspath: object,
-            graphicstrianglepath: object,
-            graphicssolidfill: object,
-            graphicsshaderfill: object,
-            graphicsstroke: object,
             loader: object,
             loaderinfo: object,
             bytearray: object,
@@ -328,6 +333,30 @@ impl<'gc> SystemClassDefs<'gc> {
             class,
             function,
             void,
+
+            // temporary initialization
+            array: object,
+            boolean: object,
+            int: object,
+            generic_vector: object,
+            namespace: object,
+            number: object,
+            string: object,
+            uint: object,
+            xml: object,
+            xml_list: object,
+
+            bitmap: object,
+            bitmapdata: object,
+            igraphicsdata: object,
+            graphicsbitmapfill: object,
+            graphicsendfill: object,
+            graphicsgradientfill: object,
+            graphicspath: object,
+            graphicstrianglepath: object,
+            graphicssolidfill: object,
+            graphicsshaderfill: object,
+            graphicsstroke: object,
         }
     }
 }
@@ -341,10 +370,7 @@ fn define_fn_on_global<'gc>(
     script: Script<'gc>,
 ) {
     let (_, global, domain) = script.init();
-    let qname = QName::new(
-        Namespace::package("", ApiVersion::AllVersions, &mut activation.borrow_gc()),
-        name,
-    );
+    let qname = QName::new(activation.avm2().namespaces.public_all(), name);
     let func = domain
         .get_defined_value(activation, qname)
         .expect("Function being defined on global should be defined in domain!");
@@ -417,6 +443,7 @@ fn vector_class<'gc>(
     activation: &mut Activation<'_, 'gc>,
 ) -> Result<ClassObject<'gc>, Error<'gc>> {
     let mc = activation.context.gc_context;
+    let namespaces = activation.avm2().namespaces;
     let (_, global, mut domain) = script.init();
 
     let object_class = activation.avm2().classes().object;
@@ -428,7 +455,7 @@ fn vector_class<'gc>(
     let generic_cls = generic_vector.inner_class_definition();
     generic_cls.add_application(mc, param_class, vector_cls.inner_class_definition());
 
-    let legacy_name = QName::new(activation.avm2().vector_internal_namespace, legacy_name);
+    let legacy_name = QName::new(namespaces.vector_internal, legacy_name);
 
     global
         .init_property(&legacy_name.into(), vector_cls.into(), activation)
@@ -444,6 +471,9 @@ macro_rules! avm2_system_class {
 
         let sc = $activation.avm2().system_classes.as_mut().unwrap();
         sc.$field = class_object;
+
+        let scd = $activation.avm2().system_class_defs.as_mut().unwrap();
+        scd.$field = class_object.inner_class_definition();
     };
 }
 
@@ -516,7 +546,6 @@ pub fn load_player_globals<'gc>(
     let number_class = number::create_class(activation);
     let int_class = int::create_class(activation);
     let uint_class = uint::create_class(activation);
-    let namespace_class = namespace::create_class(activation);
     let array_class = array::create_class(activation);
     let vector_generic_class = vector::create_generic_class(activation);
 
@@ -525,13 +554,13 @@ pub fn load_player_globals<'gc>(
     let vector_number_class = vector::create_builtin_class(activation, Some(number_class));
     let vector_object_class = vector::create_builtin_class(activation, None);
 
-    let public_ns = activation.avm2().public_namespace_base_version;
-    let vector_public_ns = activation.avm2().vector_public_namespace;
-    let vector_internal_ns = activation.avm2().vector_internal_namespace;
-
     // Unfortunately we need to specify the global traits manually, at least until
     // all the builtin classes are defined in AS.
     let mut global_traits = Vec::new();
+
+    let public_ns = activation.avm2().namespaces.public_all();
+    let vector_public_ns = activation.avm2().namespaces.vector_public;
+    let vector_internal_ns = activation.avm2().namespaces.vector_internal;
 
     let class_trait_list = &[
         (public_ns, "Object", object_i_class),
@@ -542,7 +571,6 @@ pub fn load_player_globals<'gc>(
         (public_ns, "Number", number_class),
         (public_ns, "int", int_class),
         (public_ns, "uint", uint_class),
-        (public_ns, "Namespace", namespace_class),
         (public_ns, "Array", array_class),
         (vector_public_ns, "Vector", vector_generic_class),
         (vector_internal_ns, "Vector$int", vector_int_class),
@@ -580,7 +608,7 @@ pub fn load_player_globals<'gc>(
         // right now.
         global_traits.push(Trait::from_const(
             qname,
-            Multiname::new(public_ns, "Function"),
+            Some(activation.avm2().multinames.function),
             Some(Value::Null),
         ));
     }
@@ -686,7 +714,6 @@ pub fn load_player_globals<'gc>(
     avm2_system_class!(number, activation, number_class, script);
     avm2_system_class!(int, activation, int_class, script);
     avm2_system_class!(uint, activation, uint_class, script);
-    avm2_system_class!(namespace, activation, namespace_class, script);
     avm2_system_class!(array, activation, array_class, script);
 
     avm2_system_class!(generic_vector, activation, vector_generic_class, script);
@@ -748,75 +775,49 @@ mod native {
     include!(concat!(env!("OUT_DIR"), "/native_table.rs"));
 }
 
-/// Loads classes from our custom 'playerglobal' (which are written in ActionScript)
-/// into the environment. See 'core/src/avm2/globals/README.md' for more information
-fn load_playerglobal<'gc>(
-    activation: &mut Activation<'_, 'gc>,
-    domain: Domain<'gc>,
-) -> Result<(), Error<'gc>> {
-    activation.avm2().native_method_table = native::NATIVE_METHOD_TABLE;
-    activation.avm2().native_instance_allocator_table = native::NATIVE_INSTANCE_ALLOCATOR_TABLE;
-    activation.avm2().native_super_initializer_table = native::NATIVE_SUPER_INITIALIZER_TABLE;
-    activation.avm2().native_call_handler_table = native::NATIVE_CALL_HANDLER_TABLE;
-
-    let movie = Arc::new(
-        SwfMovie::from_data(PLAYERGLOBAL, "file:///".into(), None)
-            .expect("playerglobal.swf should be valid"),
-    );
-
-    let slice = SwfSlice::from(movie.clone());
-
-    let mut reader = slice.read_from(0);
-
-    let tag_callback = |reader: &mut SwfStream<'_>, tag_code, _tag_len| {
-        if tag_code == TagCode::DoAbc2 {
-            let do_abc = reader
-                .read_do_abc_2()
-                .expect("playerglobal.swf should be valid");
-            Avm2::do_abc(
-                activation.context,
-                do_abc.data,
-                None,
-                do_abc.flags,
-                domain,
-                movie.clone(),
-            )
-            .expect("playerglobal.swf should be valid");
-        } else if tag_code != TagCode::End {
-            panic!("playerglobal should only contain `DoAbc2` tag - found tag {tag_code:?}")
-        }
-        Ok(ControlFlow::Continue)
-    };
-
-    let _ = tag_utils::decode_tags(&mut reader, tag_callback);
-    macro_rules! avm2_system_classes_playerglobal {
-        ($activation:expr, [$(($package:expr, $class_name:expr, $field:ident)),* $(,)?]) => {
-            let activation = $activation;
-            $(
-                // Lookup with the highest version, so we we see all defined classes here
-                let ns = Namespace::package($package, ApiVersion::VM_INTERNAL, &mut activation.borrow_gc());
-                let name = QName::new(ns, $class_name);
-                let class_object = activation.domain().get_defined_value(activation, name).unwrap_or_else(|e| panic!("Failed to lookup {name:?}: {e:?}"));
-                let class_object = class_object.as_object().unwrap().as_class_object().unwrap();
-                let sc = activation.avm2().system_classes.as_mut().unwrap();
-                sc.$field = class_object;
-            )*
-        }
+// This acts the same way as 'avm2_system_class', but for classes
+// declared in 'playerglobal'. Classes are declared as ("package", "class", field_name),
+// and are stored in 'avm2().system_classes'
+macro_rules! avm2_system_classes_playerglobal {
+    ($activation:expr, [$(($package:expr, $class_name:expr, $field:ident)),* $(,)?]) => {
+        let activation = $activation;
+        $(
+            // Lookup with the highest version, so we we see all defined classes here
+            let ns = Namespace::package($package, ApiVersion::VM_INTERNAL, activation.strings());
+            let name = QName::new(ns, $class_name);
+            let class_object = activation.domain().get_defined_value(activation, name).unwrap_or_else(|e| panic!("Failed to lookup {name:?}: {e:?}"));
+            let class_object = class_object.as_object().unwrap().as_class_object().unwrap();
+            let sc = activation.avm2().system_classes.as_mut().unwrap();
+            sc.$field = class_object;
+        )*
     }
+}
 
-    // This acts the same way as 'avm2_system_class', but for classes
-    // declared in 'playerglobal'. Classes are declared as ("package", "class", field_name),
-    // and are stored in 'avm2().system_classes'
+macro_rules! avm2_system_class_defs_playerglobal {
+    ($activation:expr, [$(($package:expr, $class_name:expr, $field:ident)),* $(,)?]) => {
+        let activation = $activation;
+        $(
+            // Lookup with the highest version, so we we see all defined classes here
+            let ns = Namespace::package($package, ApiVersion::VM_INTERNAL, activation.strings());
+            let name = QName::new(ns, $class_name);
+            let class_object = activation.domain().get_defined_value(activation, name).unwrap_or_else(|e| panic!("Failed to lookup {name:?}: {e:?}"));
+            let class_def = class_object.as_object().unwrap().as_class_object().unwrap().inner_class_definition();
+            let sc = activation.avm2().system_class_defs.as_mut().unwrap();
+            sc.$field = class_def;
+        )*
+    }
+}
+
+pub fn init_builtin_system_classes(activation: &mut Activation<'_, '_>) {
     avm2_system_classes_playerglobal!(
         &mut *activation,
         [
-            ("", "Date", date),
             ("", "Error", error),
             ("", "ArgumentError", argumenterror),
             ("", "QName", qname),
             ("", "EvalError", evalerror),
+            ("", "Namespace", namespace),
             ("", "RangeError", rangeerror),
-            ("", "RegExp", regexp),
             ("", "ReferenceError", referenceerror),
             ("", "SecurityError", securityerror),
             ("", "SyntaxError", syntaxerror),
@@ -825,27 +826,30 @@ fn load_playerglobal<'gc>(
             ("", "VerifyError", verifyerror),
             ("", "XML", xml),
             ("", "XMLList", xml_list),
+        ]
+    );
+
+    avm2_system_class_defs_playerglobal!(
+        &mut *activation,
+        [
+            ("", "Namespace", namespace),
+            ("", "XML", xml),
+            ("", "XMLList", xml_list),
+        ]
+    );
+}
+
+pub fn init_native_system_classes(activation: &mut Activation<'_, '_>) {
+    avm2_system_classes_playerglobal!(
+        &mut *activation,
+        [
+            ("", "Date", date),
+            ("", "RegExp", regexp),
             ("flash.display", "AVM1Movie", avm1movie),
             ("flash.display", "Bitmap", bitmap),
             ("flash.display", "BitmapData", bitmapdata),
             ("flash.display", "Scene", scene),
             ("flash.display", "FrameLabel", framelabel),
-            ("flash.display", "IGraphicsData", igraphicsdata),
-            ("flash.display", "GraphicsBitmapFill", graphicsbitmapfill),
-            ("flash.display", "GraphicsEndFill", graphicsendfill),
-            (
-                "flash.display",
-                "GraphicsGradientFill",
-                graphicsgradientfill
-            ),
-            ("flash.display", "GraphicsPath", graphicspath),
-            (
-                "flash.display",
-                "GraphicsTrianglePath",
-                graphicstrianglepath
-            ),
-            ("flash.display", "GraphicsSolidFill", graphicssolidfill),
-            ("flash.display", "GraphicsStroke", graphicsstroke),
             ("flash.display", "Graphics", graphics),
             ("flash.display", "Loader", loader),
             ("flash.display", "LoaderInfo", loaderinfo),
@@ -933,6 +937,65 @@ fn load_playerglobal<'gc>(
             ("flash.events", "SampleDataEvent", sampledataevent),
         ]
     );
+
+    avm2_system_class_defs_playerglobal!(
+        &mut *activation,
+        [
+            ("flash.display", "Bitmap", bitmap),
+            ("flash.display", "BitmapData", bitmapdata),
+            ("flash.display", "IGraphicsData", igraphicsdata),
+            ("flash.display", "GraphicsBitmapFill", graphicsbitmapfill),
+            ("flash.display", "GraphicsEndFill", graphicsendfill),
+            (
+                "flash.display",
+                "GraphicsGradientFill",
+                graphicsgradientfill
+            ),
+            ("flash.display", "GraphicsPath", graphicspath),
+            (
+                "flash.display",
+                "GraphicsTrianglePath",
+                graphicstrianglepath
+            ),
+            ("flash.display", "GraphicsSolidFill", graphicssolidfill),
+            ("flash.display", "GraphicsStroke", graphicsstroke),
+        ]
+    );
+}
+
+/// Loads classes from our custom 'playerglobal' (which are written in ActionScript)
+/// into the environment. See 'core/src/avm2/globals/README.md' for more information
+fn load_playerglobal<'gc>(
+    activation: &mut Activation<'_, 'gc>,
+    domain: Domain<'gc>,
+) -> Result<(), Error<'gc>> {
+    activation.avm2().native_method_table = native::NATIVE_METHOD_TABLE;
+    activation.avm2().native_instance_allocator_table = native::NATIVE_INSTANCE_ALLOCATOR_TABLE;
+    activation.avm2().native_super_initializer_table = native::NATIVE_SUPER_INITIALIZER_TABLE;
+    activation.avm2().native_call_handler_table = native::NATIVE_CALL_HANDLER_TABLE;
+
+    let movie = Arc::new(
+        SwfMovie::from_data(PLAYERGLOBAL, "file:///".into(), None)
+            .expect("playerglobal.swf should be valid"),
+    );
+
+    let slice = SwfSlice::from(movie.clone());
+
+    let mut reader = slice.read_from(0);
+
+    let tag_callback = |reader: &mut SwfStream<'_>, tag_code, _tag_len| {
+        if tag_code == TagCode::DoAbc2 {
+            let do_abc = reader
+                .read_do_abc_2()
+                .expect("playerglobal.swf should be valid");
+            Avm2::load_builtin_abc(activation.context, do_abc.data, domain, movie.clone());
+        } else if tag_code != TagCode::End {
+            panic!("playerglobal should only contain `DoAbc2` tag - found tag {tag_code:?}")
+        }
+        Ok(ControlFlow::Continue)
+    };
+
+    let _ = tag_utils::decode_tags(&mut reader, tag_callback);
 
     // Domain memory must be initialized after playerglobals is loaded because it relies on ByteArray.
     domain.init_default_domain_memory(activation)?;

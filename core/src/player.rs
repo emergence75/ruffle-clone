@@ -1,4 +1,3 @@
-use crate::avm1::globals::system::SandboxType;
 use crate::avm1::Attribute;
 use crate::avm1::Avm1;
 use crate::avm1::Object;
@@ -19,7 +18,6 @@ use crate::backend::{
 };
 use crate::compatibility_rules::CompatibilityRules;
 use crate::config::Letterbox;
-use crate::context::GcContext;
 use crate::context::{ActionQueue, ActionType, RenderContext, UpdateContext};
 use crate::context_menu::{
     BuiltInItemFlags, ContextMenuCallback, ContextMenuItem, ContextMenuState,
@@ -44,6 +42,7 @@ use crate::net_connection::NetConnections;
 use crate::prelude::*;
 use crate::socket::Sockets;
 use crate::streams::StreamManager;
+use crate::string::StringContext;
 use crate::string::{AvmString, AvmStringInterner};
 use crate::stub::StubCollection;
 use crate::tag_utils::SwfMovie;
@@ -2214,7 +2213,7 @@ impl Player {
                 ui: this.ui.deref_mut(),
                 action_queue,
                 gc_context,
-                interner,
+                strings: StringContext::from_parts(gc_context, interner),
                 stage,
                 mouse_data,
                 input: &this.input,
@@ -2478,7 +2477,6 @@ pub struct PlayerBuilder {
     player_version: Option<u8>,
     player_runtime: PlayerRuntime,
     quality: StageQuality,
-    sandbox_type: SandboxType,
     page_url: Option<String>,
     frame_rate: Option<f64>,
     external_interface_providers: Vec<Box<dyn ExternalInterfaceProvider>>,
@@ -2530,7 +2528,6 @@ impl PlayerBuilder {
             player_version: None,
             player_runtime: PlayerRuntime::default(),
             quality: StageQuality::High,
-            sandbox_type: SandboxType::LocalTrusted,
             page_url: None,
             frame_rate: None,
             external_interface_providers: vec![],
@@ -2704,12 +2701,6 @@ impl PlayerBuilder {
         self
     }
 
-    /// Configures the security sandbox type (default is `SandboxType::LocalTrusted`)
-    pub fn with_sandbox_type(mut self, sandbox_type: SandboxType) -> Self {
-        self.sandbox_type = sandbox_type;
-        self
-    }
-
     // Configure the embedding page's URL (if applicable)
     pub fn with_page_url(mut self, page_url: Option<String>) -> Self {
         self.page_url = page_url;
@@ -2762,16 +2753,22 @@ impl PlayerBuilder {
         fs_command_provider: Box<dyn FsCommandProvider>,
     ) -> GcRoot<'gc> {
         let mut interner = AvmStringInterner::new(gc_context);
-        let mut init = GcContext {
-            gc_context,
-            interner: &mut interner,
+        let (avm1, avm2) = {
+            // SAFETY: Extending this borrow to `'gc` is sound, as the result of this
+            // block implements `Collect`, preventing any `&'gc _` outliving it.
+            let interner: &'gc mut _ = unsafe { &mut *(&mut interner as *mut _) };
+            let mut init = StringContext::from_parts(gc_context, interner);
+            (
+                Avm1::new(&mut init, player_version),
+                Avm2::new(&mut init, player_version, player_runtime),
+            )
         };
 
         let data = GcRootData {
             audio_manager: AudioManager::new(),
             action_queue: ActionQueue::new(),
-            avm1: Avm1::new(&mut init, player_version),
-            avm2: Avm2::new(&mut init, player_version, player_runtime),
+            avm1,
+            avm2,
             interner,
             current_context_menu: None,
             drag_object: None,
@@ -2878,7 +2875,7 @@ impl PlayerBuilder {
 
                 // Misc. state
                 rng: SmallRng::seed_from_u64(get_current_date_time().timestamp_millis() as u64),
-                system: SystemProperties::new(self.sandbox_type),
+                system: SystemProperties::new(),
                 page_url: self.page_url.clone(),
                 transform_stack: TransformStack::new(),
                 instance_counter: 0,

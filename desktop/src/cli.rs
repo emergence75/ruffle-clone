@@ -25,6 +25,12 @@ fn get_default_config_directory() -> std::path::PathBuf {
         .join("ruffle")
 }
 
+fn get_default_cache_directory() -> std::path::PathBuf {
+    dirs::cache_dir()
+        .expect("Couldn't find a valid cache dir")
+        .join("ruffle")
+}
+
 #[derive(Parser, Debug, Clone)]
 #[clap(
     name = "Ruffle",
@@ -113,6 +119,12 @@ pub struct Opt {
     #[clap(long, default_value_os_t=get_default_config_directory())]
     pub config: std::path::PathBuf,
 
+    /// Directory that contains non-essential files created by Ruffle.
+    ///
+    /// This directory can be deleted without affecting functionality.
+    #[clap(long, default_value_os_t=get_default_cache_directory())]
+    pub cache_directory: std::path::PathBuf,
+
     /// Proxy to use when loading movies via URL.
     #[clap(long)]
     pub proxy: Option<Url>,
@@ -168,6 +180,10 @@ pub struct Opt {
     /// The handling mode of links opening a new website.
     #[clap(long, default_value = "allow")]
     pub open_url_mode: OpenURLMode,
+
+    /// How to handle non-interactive filesystem access.
+    #[clap(long, default_value = "ask")]
+    pub filesystem_access_mode: FilesystemAccessMode,
 
     /// Provide a dummy (completely empty) External Interface to the movie.
     /// This may break some movies that expect an External Interface to be functional,
@@ -405,4 +421,16 @@ enum NamedKeyCode {
     Backslash = 220,
     RBracket = 221,
     Apostrophe = 222,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq, clap::ValueEnum)]
+pub enum FilesystemAccessMode {
+    /// Always allow non-interactive access to the filesystem.
+    Allow,
+
+    /// Refuse all non-interactive access to the filesystem.
+    Deny,
+
+    /// Ask the user before accessing the filesystem non-interactively.
+    Ask,
 }

@@ -11,7 +11,7 @@ on:
 jobs:
   test-dockerfile:
     name: Test the Dockerfile
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v4
@@ -37,7 +37,7 @@ jobs:
         uses: sigoden/install-binary@v1
         with:
           repo: WebAssembly/binaryen
-          tag: version_118
+          tag: version_119
           name: wasm-opt
 
       - name: Install fclones

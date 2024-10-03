@@ -720,6 +720,9 @@ fn handle_input_multiname<'gc>(
 ) -> Multiname<'gc> {
     // Special case to handle code like: xml["@attr"]
     // FIXME: Figure out the exact semantics.
+    // NOTE: It is very important the code within the if-statement is not run
+    // when the passed name has the Any namespace. Otherwise, we run the risk of
+    // creating a NamespaceSet::Multiple with an Any namespace in it.
     if !name.has_explicit_namespace()
         && !name.is_attribute()
         && !name.is_any_name()
@@ -735,7 +738,7 @@ fn handle_input_multiname<'gc>(
                 let mut ns = Vec::new();
                 ns.extend(name.namespace_set());
                 if !name.contains_public_namespace() {
-                    ns.push(activation.avm2().public_namespace_base_version);
+                    ns.push(activation.avm2().namespaces.public_all());
                 }
                 new_name.set_ns(NamespaceSet::new(ns, activation.gc()));
             }

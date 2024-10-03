@@ -16,7 +16,7 @@ use crate::context::UpdateContext;
 use crate::string::WString;
 use bitflags::bitflags;
 use fnv::FnvHashMap;
-use gc_arena::{Collect, GcCell, Mutation};
+use gc_arena::{Collect, Gc, GcCell, Mutation};
 
 use std::cell::Ref;
 use std::collections::HashSet;
@@ -439,45 +439,39 @@ impl<'gc> Class<'gc> {
             .ok_or_else(|| "LoadError: Instance index not valid".into());
         let abc_instance = abc_instance?;
 
-        let name = QName::from_abc_multiname(unit, abc_instance.name, activation.context)?;
+        let name = QName::from_abc_multiname(activation, unit, abc_instance.name)?;
+
         let super_class = if abc_instance.super_name.0 == 0 {
             None
         } else {
-            let multiname =
-                unit.pool_multiname_static(abc_instance.super_name, activation.context)?;
+            let multiname = unit.pool_multiname_static(activation, abc_instance.super_name)?;
 
             Some(
                 activation
                     .domain()
                     .get_class(activation.context, &multiname)
                     .ok_or_else(|| {
-                        make_error_1014(
-                            activation,
-                            multiname.to_qualified_name(activation.context.gc_context),
-                        )
+                        make_error_1014(activation, multiname.to_qualified_name(activation.gc()))
                     })?,
             )
         };
 
         let protected_namespace = if let Some(ns) = &abc_instance.protected_namespace {
-            Some(unit.pool_namespace(*ns, activation.context)?)
+            Some(unit.pool_namespace(activation, *ns)?)
         } else {
             None
         };
 
         let mut interfaces = Vec::with_capacity(abc_instance.interfaces.len());
         for interface_name in &abc_instance.interfaces {
-            let multiname = unit.pool_multiname_static(*interface_name, activation.context)?;
+            let multiname = unit.pool_multiname_static(activation, *interface_name)?;
 
             interfaces.push(
                 activation
                     .domain()
                     .get_class(activation.context, &multiname)
                     .ok_or_else(|| {
-                        make_error_1014(
-                            activation,
-                            multiname.to_qualified_name(activation.context.gc_context),
-                        )
+                        make_error_1014(activation, multiname.to_qualified_name(activation.gc()))
                     })?,
             );
         }
@@ -524,7 +518,7 @@ impl<'gc> Class<'gc> {
                     // A 'callable' class doesn't have a signature - let the
                     // method do any needed coercions
                     vec![],
-                    Multiname::any(),
+                    None,
                     true,
                     activation.context.gc_context,
                 );
@@ -784,13 +778,11 @@ impl<'gc> Class<'gc> {
         // interfaces (i.e. those that were not already implemented by the superclass)
         // Otherwise, our behavior diverges from Flash Player in certain cases.
         // See the ignored test 'tests/tests/swfs/avm2/weird_superinterface_properties/'
+        let ns = context.avm2.namespaces.public_vm_internal();
         for interface in &interfaces {
             for interface_trait in &*interface.traits() {
                 if !interface_trait.name().namespace().is_public() {
-                    let public_name = QName::new(
-                        context.avm2.public_namespace_vm_internal,
-                        interface_trait.name().local_name(),
-                    );
+                    let public_name = QName::new(ns, interface_trait.name().local_name());
                     self.0.read().vtable.copy_property_for_interface(
                         context.gc_context,
                         public_name,
@@ -811,8 +803,7 @@ impl<'gc> Class<'gc> {
         method: &AbcMethod,
         body: &AbcMethodBody,
     ) -> Result<Class<'gc>, Error<'gc>> {
-        let name =
-            translation_unit.pool_string(method.name.as_u30(), &mut activation.borrow_gc())?;
+        let name = translation_unit.pool_string(method.name.as_u30(), activation.strings())?;
         let mut traits = Vec::with_capacity(body.traits.len());
 
         for trait_entry in body.traits.iter() {
@@ -823,7 +814,7 @@ impl<'gc> Class<'gc> {
             )?);
         }
 
-        let name = QName::new(activation.avm2().public_namespace_base_version, name);
+        let name = QName::new(activation.avm2().namespaces.public_all(), name);
 
         let i_class = Class(GcCell::new(
             activation.context.gc_context,
@@ -1028,10 +1019,10 @@ impl<'gc> Class<'gc> {
         value: Value<'gc>,
     ) {
         self.define_instance_trait(
-            activation.context.gc_context,
+            activation.gc(),
             Trait::from_const(
                 name,
-                Multiname::new(activation.avm2().public_namespace_base_version, "Function"),
+                Some(activation.avm2().multinames.function),
                 Some(value),
             ),
         );
@@ -1046,10 +1037,10 @@ impl<'gc> Class<'gc> {
     ) {
         for &(name, value) in items {
             self.define_class_trait(
-                activation.context.gc_context,
+                activation.gc(),
                 Trait::from_const(
                     QName::new(namespace, name),
-                    Multiname::new(activation.avm2().public_namespace_base_version, "Number"),
+                    Some(activation.avm2().multinames.number),
                     Some(value.into()),
                 ),
             );
@@ -1065,10 +1056,10 @@ impl<'gc> Class<'gc> {
     ) {
         for &(name, value) in items {
             self.define_class_trait(
-                activation.context.gc_context,
+                activation.gc(),
                 Trait::from_const(
                     QName::new(namespace, name),
-                    Multiname::new(activation.avm2().public_namespace_base_version, "uint"),
+                    Some(activation.avm2().multinames.uint),
                     Some(value.into()),
                 ),
             );
@@ -1087,7 +1078,7 @@ impl<'gc> Class<'gc> {
                 activation.context.gc_context,
                 Trait::from_const(
                     QName::new(namespace, name),
-                    Multiname::new(activation.avm2().public_namespace_base_version, "int"),
+                    Some(activation.avm2().multinames.int),
                     Some(value.into()),
                 ),
             );
@@ -1112,6 +1103,7 @@ impl<'gc> Class<'gc> {
         }
     }
 
+    #[allow(clippy::type_complexity)]
     #[inline(never)]
     pub fn define_builtin_instance_methods_with_sig(
         self,
@@ -1121,7 +1113,7 @@ impl<'gc> Class<'gc> {
             &'static str,
             NativeMethodImpl,
             Vec<ParamConfig<'gc>>,
-            Multiname<'gc>,
+            Option<Gc<'gc, Multiname<'gc>>>,
         )>,
     ) {
         for (name, value, params, return_type) in items {
@@ -1198,7 +1190,7 @@ impl<'gc> Class<'gc> {
                 activation.context.gc_context,
                 Trait::from_const(
                     QName::new(namespace, name),
-                    Multiname::new(activation.avm2().public_namespace_base_version, "int"),
+                    Some(activation.avm2().multinames.int),
                     Some(value.into()),
                 ),
             );

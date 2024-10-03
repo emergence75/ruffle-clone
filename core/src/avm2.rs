@@ -4,19 +4,21 @@ use std::rc::Rc;
 
 use crate::avm2::class::AllocatorFn;
 use crate::avm2::error::make_error_1107;
-use crate::avm2::globals::{SystemClassDefs, SystemClasses};
+use crate::avm2::globals::{
+    init_builtin_system_classes, init_native_system_classes, SystemClassDefs, SystemClasses,
+};
 use crate::avm2::method::{Method, NativeMethodImpl};
 use crate::avm2::scope::ScopeChain;
 use crate::avm2::script::{Script, TranslationUnit};
-use crate::context::{GcContext, UpdateContext};
+use crate::context::UpdateContext;
 use crate::display_object::{DisplayObject, DisplayObjectWeak, TDisplayObject};
-use crate::string::AvmString;
+use crate::string::{AvmString, StringContext};
 use crate::tag_utils::SwfMovie;
 use crate::PlayerRuntime;
 
 use fnv::FnvHashMap;
 use gc_arena::lock::GcRefLock;
-use gc_arena::{Collect, Mutation};
+use gc_arena::{Collect, Gc, Mutation};
 use std::sync::Arc;
 use swf::avm2::read::Reader;
 use swf::DoAbc2Flag;
@@ -79,8 +81,8 @@ pub use crate::avm2::domain::{Domain, DomainPtr};
 pub use crate::avm2::error::Error;
 pub use crate::avm2::flv::FlvValueAvm2Ext;
 pub use crate::avm2::globals::flash::ui::context_menu::make_context_menu_state;
-pub use crate::avm2::multiname::Multiname;
-pub use crate::avm2::namespace::Namespace;
+pub use crate::avm2::multiname::{CommonMultinames, Multiname};
+pub use crate::avm2::namespace::{CommonNamespaces, Namespace};
 pub use crate::avm2::object::{
     ArrayObject, BitmapDataObject, ClassObject, EventObject, Object, SoundChannelObject,
     StageObject, TObject,
@@ -91,7 +93,6 @@ pub use crate::avm2::value::Value;
 use self::api_version::ApiVersion;
 use self::object::WeakObject;
 use self::scope::Scope;
-use num_traits::FromPrimitive;
 
 const BROADCAST_WHITELIST: [&str; 4] = ["enterFrame", "exitFrame", "frameConstructed", "render"];
 
@@ -133,25 +134,10 @@ pub struct Avm2<'gc> {
     /// However, it's not strictly defined which items end up there.
     toplevel_global_object: Option<Object<'gc>>,
 
-    /// The public namespace, versioned with `ApiVersion::ALL_VERSIONS`.
-    /// When calling into user code, you should almost always use `find_public_namespace`
-    /// instead, as it will return the correct version for the current call stack.
-    public_namespace_base_version: Namespace<'gc>,
-    // FIXME - make this an enum map once gc-arena supports it
-    public_namespaces: Vec<Namespace<'gc>>,
-    public_namespace_vm_internal: Namespace<'gc>,
-    pub internal_namespace: Namespace<'gc>,
-    pub as3_namespace: Namespace<'gc>,
-    pub vector_public_namespace: Namespace<'gc>,
-    pub vector_internal_namespace: Namespace<'gc>,
-    pub proxy_namespace: Namespace<'gc>,
-    // these are required to facilitate shared access between Rust and AS
-    pub flash_display_internal: Namespace<'gc>,
-    pub flash_utils_internal: Namespace<'gc>,
-    pub flash_geom_internal: Namespace<'gc>,
-    pub flash_events_internal: Namespace<'gc>,
-    pub flash_text_engine_internal: Namespace<'gc>,
-    pub flash_net_internal: Namespace<'gc>,
+    /// Pre-created known namespaces.
+    namespaces: Gc<'gc, CommonNamespaces<'gc>>,
+
+    pub multinames: Gc<'gc, CommonMultinames<'gc>>,
 
     #[collect(require_static)]
     native_method_table: &'static [Option<(&'static str, NativeMethodImpl)>],
@@ -203,57 +189,32 @@ pub struct Avm2<'gc> {
 impl<'gc> Avm2<'gc> {
     /// Construct a new AVM interpreter.
     pub fn new(
-        context: &mut GcContext<'_, 'gc>,
+        context: &mut StringContext<'gc>,
         player_version: u8,
         player_runtime: PlayerRuntime,
     ) -> Self {
-        let playerglobals_domain = Domain::uninitialized_domain(context.gc_context, None);
-        let stage_domain =
-            Domain::uninitialized_domain(context.gc_context, Some(playerglobals_domain));
+        let mc = context.gc();
 
-        let public_namespaces = (0..=(ApiVersion::VM_INTERNAL as usize))
-            .map(|val| Namespace::package("", ApiVersion::from_usize(val).unwrap(), context))
-            .collect();
+        let playerglobals_domain = Domain::uninitialized_domain(mc, None);
+        let stage_domain = Domain::uninitialized_domain(mc, Some(playerglobals_domain));
+
+        let namespaces = CommonNamespaces::new(context);
+        let multinames = CommonMultinames::new(context, &namespaces);
 
         Self {
             player_version,
             player_runtime,
             stack: Vec::new(),
             scope_stack: Vec::new(),
-            call_stack: GcRefLock::new(context.gc_context, CallStack::new().into()),
+            call_stack: GcRefLock::new(mc, CallStack::new().into()),
             playerglobals_domain,
             stage_domain,
             system_classes: None,
             system_class_defs: None,
             toplevel_global_object: None,
 
-            public_namespace_base_version: Namespace::package("", ApiVersion::AllVersions, context),
-            public_namespaces,
-            public_namespace_vm_internal: Namespace::package("", ApiVersion::VM_INTERNAL, context),
-            internal_namespace: Namespace::internal("", context),
-            as3_namespace: Namespace::package(
-                "http://adobe.com/AS3/2006/builtin",
-                ApiVersion::AllVersions,
-                context,
-            ),
-            vector_public_namespace: Namespace::package(
-                "__AS3__.vec",
-                ApiVersion::AllVersions,
-                context,
-            ),
-            vector_internal_namespace: Namespace::internal("__AS3__.vec", context),
-            proxy_namespace: Namespace::package(
-                "http://www.adobe.com/2006/actionscript/flash/proxy",
-                ApiVersion::AllVersions,
-                context,
-            ),
-            // these are required to facilitate shared access between Rust and AS
-            flash_display_internal: Namespace::internal("flash.display", context),
-            flash_utils_internal: Namespace::internal("flash.utils", context),
-            flash_geom_internal: Namespace::internal("flash.geom", context),
-            flash_events_internal: Namespace::internal("flash.events", context),
-            flash_text_engine_internal: Namespace::internal("flash.text.engine", context),
-            flash_net_internal: Namespace::internal("flash.net", context),
+            namespaces: Gc::new(mc, namespaces),
+            multinames: Gc::new(mc, multinames),
 
             native_method_table: Default::default(),
             native_instance_allocator_table: Default::default(),
@@ -638,8 +599,7 @@ impl<'gc> Avm2<'gc> {
         activation.set_outer(ScopeChain::new(domain));
 
         let num_scripts = abc.scripts.len();
-        let tunit =
-            TranslationUnit::from_abc(abc, domain, name, movie, activation.context.gc_context);
+        let tunit = TranslationUnit::from_abc(abc, domain, name, movie, activation.gc());
         tunit.load_classes(&mut activation)?;
         for i in 0..num_scripts {
             tunit.load_script(i as u32, &mut activation)?;
@@ -649,6 +609,44 @@ impl<'gc> Avm2<'gc> {
             return Ok(Some(tunit.get_script(num_scripts - 1).unwrap()));
         }
         Ok(None)
+    }
+
+    /// Load the playerglobal ABC file.
+    pub fn load_builtin_abc(
+        context: &mut UpdateContext<'gc>,
+        data: &[u8],
+        domain: Domain<'gc>,
+        movie: Arc<SwfMovie>,
+    ) {
+        let mut reader = Reader::new(data);
+        let abc = match reader.read() {
+            Ok(abc) => abc,
+            Err(_) => panic!("Builtin ABC should be valid"),
+        };
+
+        let mut activation = Activation::from_domain(context, domain);
+        // Make sure we have the correct domain for code that tries to access it
+        // using `activation.domain()`
+        activation.set_outer(ScopeChain::new(domain));
+
+        let tunit = TranslationUnit::from_abc(abc, domain, None, movie, activation.gc());
+        tunit
+            .load_classes(&mut activation)
+            .expect("Classes should load");
+
+        // The second script (script #1) is Toplevel.as, and includes important
+        // builtin classes such as Namespace, QName, and XML.
+        tunit
+            .load_script(1, &mut activation)
+            .expect("Script should load");
+        init_builtin_system_classes(&mut activation);
+
+        // The first script (script #0) is globals.as, and includes other builtin
+        // classes that are less critical for the AVM to load.
+        tunit
+            .load_script(0, &mut activation)
+            .expect("Script should load");
+        init_native_system_classes(&mut activation);
     }
 
     pub fn stage_domain(&self) -> Domain<'gc> {
@@ -803,7 +801,7 @@ impl<'gc> Avm2<'gc> {
     /// See `AvmCore::findPublicNamespace()`
     /// https://github.com/adobe/avmplus/blob/858d034a3bd3a54d9b70909386435cf4aec81d21/core/AvmCore.cpp#L5809C25-L5809C25
     pub fn find_public_namespace(&self) -> Namespace<'gc> {
-        self.public_namespaces[self.root_api_version as usize]
+        self.namespaces.public_for(self.root_api_version)
     }
 
     pub fn optimizer_enabled(&self) -> bool {

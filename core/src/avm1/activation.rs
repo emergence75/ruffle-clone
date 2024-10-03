@@ -14,7 +14,7 @@ use crate::display_object::{
 };
 use crate::ecma_conversions::{f64_to_wrapping_i32, f64_to_wrapping_u32};
 use crate::loader::MovieLoaderVMData;
-use crate::string::{AvmString, SwfStrExt as _, WStr, WString};
+use crate::string::{AvmString, StringContext, SwfStrExt as _, WStr, WString};
 use crate::tag_utils::SwfSlice;
 use crate::vminterface::Instantiator;
 use crate::{avm_error, avm_warn};
@@ -242,8 +242,13 @@ impl<'a, 'gc> Activation<'a, 'gc> {
     /// Convenience method to retrieve the current GC context. Note that explicitly writing
     /// `self.context.gc_context` can be sometimes necessary to satisfy the borrow checker.
     #[inline(always)]
-    pub fn gc(&self) -> &'gc gc_arena::Mutation<'gc> {
+    pub fn gc(&self) -> &'gc Mutation<'gc> {
         self.context.gc_context
+    }
+
+    #[inline(always)]
+    pub fn strings(&mut self) -> &mut StringContext<'gc> {
+        &mut self.context.strings
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -896,15 +901,11 @@ impl<'a, 'gc> Activation<'a, 'gc> {
         &mut self,
         action: ConstantPool,
     ) -> Result<FrameControl<'gc>, Error<'gc>> {
+        let encoding = self.encoding();
         let constants = action
             .strings
             .iter()
-            .map(|s| {
-                self.context
-                    .interner
-                    .intern_wstr(self.context.gc_context, s.decode(self.encoding()))
-                    .into()
-            })
+            .map(|s| self.strings().intern_wstr(s.decode(encoding)).into())
             .collect();
 
         self.context

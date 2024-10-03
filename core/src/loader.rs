@@ -5,13 +5,14 @@ use crate::avm1::{Attribute, Avm1};
 use crate::avm1::{ExecutionReason, NativeObject};
 use crate::avm1::{Object, SoundObject, TObject, Value};
 use crate::avm2::bytearray::ByteArrayStorage;
+use crate::avm2::globals::flash::utils::byte_array::strip_bom;
 use crate::avm2::object::{
     ByteArrayObject, EventObject as Avm2EventObject, FileReferenceObject, LoaderStream,
     TObject as _,
 };
 use crate::avm2::{
     Activation as Avm2Activation, Avm2, BitmapDataObject, Domain as Avm2Domain,
-    Object as Avm2Object, Value as Avm2Value,
+    Object as Avm2Object,
 };
 use crate::backend::navigator::{ErrorResponse, OwnedFuture, Request, SuccessResponse};
 use crate::backend::ui::DialogResultFuture;
@@ -597,6 +598,30 @@ impl<'gc> LoadManager<'gc> {
         }
 
         did_finish
+    }
+
+    pub fn run_exit_frame(context: &mut UpdateContext<'gc>) {
+        // The root movie might not have come from a loader, so check it separately.
+        // `fire_init_and_complete_events` is idempotent, so we unconditionally call it here
+        if let Some(movie) = context
+            .stage
+            .child_by_index(0)
+            .and_then(|o| o.as_movie_clip())
+        {
+            movie.try_fire_loaderinfo_events(context);
+        }
+        let handles: Vec<_> = context.load_manager.0.iter().map(|(h, _)| h).collect();
+        for handle in handles {
+            let Some(Loader::Movie { target_clip, .. }) = context.load_manager.get_loader(handle)
+            else {
+                continue;
+            };
+            if let Some(movie) = target_clip.as_movie_clip() {
+                if movie.try_fire_loaderinfo_events(context) {
+                    context.load_manager.remove_loader(handle)
+                }
+            }
+        }
     }
 
     /// Display a dialog allowing a user to select a file
@@ -1560,8 +1585,7 @@ impl<'gc> Loader<'gc> {
                         if body.is_empty() {
                             None
                         } else {
-                            let string_value =
-                                AvmString::new_utf8_bytes(activation.context.gc_context, &body);
+                            let string_value = strip_bom(activation, &body);
 
                             activation
                                 .avm2()
@@ -1576,10 +1600,7 @@ impl<'gc> Loader<'gc> {
                             tracing::warn!("Invalid URLLoaderDataFormat: {}", data_format);
                         }
 
-                        let string_value =
-                            AvmString::new_utf8_bytes(activation.context.gc_context, &body);
-
-                        Some(Avm2Value::String(string_value))
+                        Some(strip_bom(activation, &body).into())
                     };
 
                     if let Some(data_object) = data_object {
@@ -2500,6 +2521,10 @@ impl<'gc> Loader<'gc> {
                 "addChild at the correct time"
             );
 
+            if let Some(loader_info) = loader_info.as_loader_info_object() {
+                loader_info.set_expose_content();
+            }
+
             // Note that we do *not* use the 'addChild' method here:
             // Per the flash docs, our implementation always throws
             // an 'unsupported' error. Also, the AVM2 side of our movie
@@ -2767,7 +2792,10 @@ impl<'gc> Loader<'gc> {
                         false,
                     );
                 }
-                true
+                // If the movie was loaded from avm1, clean it up now. If a movie (including an AVM1 movie)
+                // was loaded from avm2, clean it up in `run_exit_frame`, after we have a chance to fire
+                // the AVM2-side events
+                matches!(vm_data, MovieLoaderVMData::Avm1 { .. })
             }
         }
     }

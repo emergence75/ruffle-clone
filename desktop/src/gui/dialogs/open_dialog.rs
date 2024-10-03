@@ -407,7 +407,7 @@ impl OpenDialog {
 
                 // TODO: This should probably be a global setting somewhere, not per load
                 ui.label(text(locale, "open-url-mode"));
-                ComboBox::from_id_source("open-file-advanced-options-open-url-mode")
+                ComboBox::from_id_salt("open-file-advanced-options-open-url-mode")
                     .selected_text(match self.options.open_url_mode {
                         OpenURLMode::Allow => text(locale, "open-url-mode-allow"),
                         OpenURLMode::Confirm => text(locale, "open-url-mode-confirm"),
@@ -525,7 +525,7 @@ impl OpenDialog {
                         ui.add_sized(
                             ui.available_size(),
                             Slider::new(&mut self.framerate, 0.0..=100.0)
-                                .clamp_to_range(false)
+                                .clamping(egui::SliderClamping::Never)
                                 .suffix(text(locale, "custom-framerate-suffix")),
                         );
                     });
@@ -569,7 +569,7 @@ impl OpenDialog {
                     ui.horizontal(|ui| {
                         ui.text_edit_singleline(value);
                         if ui
-                            .button("x")
+                            .button("🗑")
                             .on_hover_text(text(locale, "open-dialog-remove-parameter"))
                             .clicked()
                         {
@@ -764,7 +764,7 @@ impl<T: Copy + PartialEq> InnerField for EnumDropdownField<T> {
     }
 
     fn ui(&self, ui: &mut Ui, value: &mut Self::Value, _error: bool, locale: &LanguageIdentifier) {
-        ComboBox::from_id_source(self.id)
+        ComboBox::from_id_salt(self.id)
             .selected_text((self.value_to_name)(*value, locale))
             .show_ui(ui, |ui| {
                 for possible_value in &self.possible_values {
@@ -811,7 +811,7 @@ impl InnerField for BooleanDropdownField {
     }
 
     fn ui(&self, ui: &mut Ui, value: &mut Self::Value, _error: bool, locale: &LanguageIdentifier) {
-        ComboBox::from_id_source(self.id)
+        ComboBox::from_id_salt(self.id)
             .selected_text((self.value_to_name)(*value, locale))
             .show_ui(ui, |ui| {
                 ui.selectable_value(value, false, (self.value_to_name)(false, locale));
