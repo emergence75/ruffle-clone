@@ -302,7 +302,6 @@ impl ActivePlayer {
                 DesktopUiBackend::new(
                     window.clone(),
                     event_loop.clone(),
-                    opt.open_url_mode,
                     font_database,
                     preferences,
                     file_picker,
