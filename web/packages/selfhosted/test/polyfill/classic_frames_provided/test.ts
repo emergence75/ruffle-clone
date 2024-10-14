@@ -1,4 +1,8 @@
-import { openTest } from "../../utils.js";
+import {
+    openTest,
+    waitForRuffleObjectInTestFrame,
+    getContainerHTMLFromTestFrame,
+} from "../../utils.js";
 import { expect, use } from "chai";
 import chaiHtml from "chai-html";
 import fs from "fs";
@@ -12,9 +16,9 @@ describe("Flash inside frame with provided ruffle", () => {
 
     it("polyfills inside a frame", async () => {
         await browser.switchToFrame(await browser.$("#test-frame"));
-        await browser.$("<ruffle-object />").waitForExist();
+        await waitForRuffleObjectInTestFrame(browser);
 
-        const actual = await browser.$("#test-container").getHTML(false);
+        const actual = await getContainerHTMLFromTestFrame(browser);
         const expected = fs.readFileSync(
             `${import.meta.dirname}/expected.html`,
             "utf8",
@@ -36,9 +40,9 @@ describe("Flash inside frame with provided ruffle", () => {
         // And finally, check
         await browser.switchToFrame(null);
         await browser.switchToFrame(await browser.$("#test-frame"));
-        await browser.$("<ruffle-object />").waitForExist();
+        await waitForRuffleObjectInTestFrame(browser);
 
-        const actual = await browser.$("#test-container").getHTML(false);
+        const actual = await getContainerHTMLFromTestFrame(browser);
         const expected = fs.readFileSync(
             `${import.meta.dirname}/expected.html`,
             "utf8",
