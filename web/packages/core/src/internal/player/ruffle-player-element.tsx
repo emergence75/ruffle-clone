@@ -1,7 +1,12 @@
 import type { DataLoadOptions, URLLoadOptions } from "../../public/config";
-import type { MovieMetadata, PlayerElement } from "../../public/player";
-import { InnerPlayer, ReadyState } from "./inner";
-import { APIVersions } from "../../public/player";
+import {
+    APIVersions,
+    LegacyReadyState,
+    MovieMetadata,
+    PlayerElement,
+    ReadyState,
+} from "../../public/player";
+import { InnerPlayer } from "./inner";
 import { PlayerV1Impl } from "./impl_v1";
 
 /**
@@ -22,8 +27,15 @@ export class RufflePlayerElement extends HTMLElement implements PlayerElement {
         this.#legacyFSCommandHandler = value;
     }
 
-    get readyState(): ReadyState {
-        return this.#inner._readyState;
+    get readyState(): LegacyReadyState {
+        const readyState = this.#inner._readyState;
+        if (readyState == ReadyState.Loaded) {
+            return LegacyReadyState.Loaded;
+        } else if (readyState == ReadyState.Loading) {
+            return LegacyReadyState.Loading;
+        } else {
+            return LegacyReadyState.HaveNothing;
+        }
     }
 
     get metadata(): MovieMetadata | null {

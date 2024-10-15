@@ -1,6 +1,27 @@
 import { DataLoadOptions, URLLoadOptions } from "../config";
 import { MovieMetadata } from "./movie-metadata";
-import { ReadyState } from "../../internal/player/inner";
+
+/**
+ * Describes the loading state of an SWF movie.
+ *
+ * @deprecated Use {@link PlayerV1.readyState} to get a {@link ReadyState} instead.
+ */
+export enum LegacyReadyState {
+    /**
+     * No movie is loaded, or no information is yet available about the movie.
+     */
+    HaveNothing = 0,
+
+    /**
+     * The movie is still loading, but it has started playback, and metadata is available.
+     */
+    Loading = 1,
+
+    /**
+     * The movie has completely loaded.
+     */
+    Loaded = 2,
+}
 
 /**
  * Legacy interface to the Ruffle API.
@@ -58,7 +79,7 @@ export interface LegacyRuffleAPI {
      * This method may be replaced by Flash and is not guaranteed to exist.
      * A direct replacement is {@link PlayerV1.readyState}
      */
-    get readyState(): ReadyState;
+    get readyState(): LegacyReadyState;
 
     /**
      * The metadata of the playing movie (such as movie width and height).

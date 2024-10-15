@@ -1,6 +1,25 @@
 import { MovieMetadata } from "./movie-metadata";
 import { DataLoadOptions, URLLoadOptions } from "../config";
-import { ReadyState } from "../../internal/player/inner";
+
+/**
+ * Describes the loading state of an SWF movie.
+ */
+export enum ReadyState {
+    /**
+     * No movie is loaded, or no information is yet available about the movie.
+     */
+    HaveNothing = "unloaded",
+
+    /**
+     * The movie is still loading, but it has started playback, and metadata is available.
+     */
+    Loading = "loading",
+
+    /**
+     * The movie has completely loaded.
+     */
+    Loaded = "loaded",
+}
 
 export interface PlayerV1 {
     /**

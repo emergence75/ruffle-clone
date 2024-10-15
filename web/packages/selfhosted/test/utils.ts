@@ -30,10 +30,9 @@ export async function isRufflePlayerLoaded(
         (await browser.execute(
             (player) =>
                 // https://github.com/webdriverio/webdriverio/issues/6486
-                // TODO: How can we import ReadyState enum?
                 (player as unknown as Player.PlayerElement).ruffle().readyState,
             player,
-        )) === 2
+        )) === "loaded"
     );
 }
 
