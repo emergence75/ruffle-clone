@@ -198,6 +198,12 @@ impl<'gc> EditText<'gc> {
     // This seems to be OS-independent
     const INPUT_NEWLINE: char = '\r';
 
+    /// Gutter is the constant internal padding of a text field.
+    /// It applies to each side and cannot be changed.
+    ///
+    /// See <https://help.adobe.com/en_US/FlashPlatform/reference/actionscript/3/flash/text/TextLineMetrics.html>.
+    const GUTTER_WIDTH: Twips = Twips::new(40);
+
     /// Creates a new `EditText` from an SWF `DefineEditText` tag.
     pub fn from_swf_tag(
         context: &mut UpdateContext<'gc>,
@@ -240,7 +246,7 @@ impl<'gc> EditText<'gc> {
             &text_spans,
             context,
             swf_movie.clone(),
-            swf_tag.bounds().width() - Twips::from_pixels(Self::INTERNAL_PADDING * 2.0),
+            swf_tag.bounds().width() - Self::GUTTER_WIDTH * 2,
             swf_tag.is_word_wrap(),
             font_type,
         );
@@ -733,16 +739,6 @@ impl<'gc> EditText<'gc> {
         self.try_bind_text_field_variable(activation, true);
     }
 
-    /// Construct a base text transform for this `EditText`, to be used for
-    /// evaluating fonts.
-    ///
-    /// The `text_transform` constitutes the base transform that all text is
-    /// written into.
-
-    /// Internal padding between the bounds of the EditText and the text.
-    /// Applies to each side.
-    const INTERNAL_PADDING: f64 = 2.0;
-
     /// Relayout the `EditText`.
     ///
     /// This function operates exclusively with the text-span representation of
@@ -754,7 +750,7 @@ impl<'gc> EditText<'gc> {
         let autosize = edit_text.autosize;
         let is_word_wrap = edit_text.flags.contains(EditTextFlag::WORD_WRAP);
         let movie = edit_text.static_data.swf.clone();
-        let padding = Twips::from_pixels(EditText::INTERNAL_PADDING) * 2;
+        let padding = Self::GUTTER_WIDTH * 2;
 
         if edit_text.flags.contains(EditTextFlag::PASSWORD) {
             // If the text is a password, hide the text
@@ -957,8 +953,7 @@ impl<'gc> EditText<'gc> {
         //   (instead of culling, this can be implemented as having the loop start from `scrollY`th line)
         //   (maybe we could cull-before-render all glyphs, thus removing the need for masking?)
         // TODO: also cull text that's simply out of screen, just like we cull whole DOs in render_self().
-        if origin.y() + Twips::from_pixels(Self::INTERNAL_PADDING)
-            - edit_text.vertical_scroll_offset()
+        if origin.y() + Self::GUTTER_WIDTH - edit_text.vertical_scroll_offset()
             > edit_text.bounds.y_max
         {
             return;
@@ -1332,8 +1327,8 @@ impl<'gc> EditText<'gc> {
     pub fn screen_position_to_index(self, position: Point<Twips>) -> Option<usize> {
         let text = self.0.read();
         let mut position = self.global_to_local(position)?;
-        position.x += Twips::from_pixels(Self::INTERNAL_PADDING) + Twips::from_pixels(text.hscroll);
-        position.y += Twips::from_pixels(Self::INTERNAL_PADDING) + text.vertical_scroll_offset();
+        position.x += Self::GUTTER_WIDTH + Twips::from_pixels(text.hscroll);
+        position.y += Self::GUTTER_WIDTH + text.vertical_scroll_offset();
 
         // TODO We can use binary search for both y and x here
 
@@ -1963,7 +1958,7 @@ impl<'gc> EditText<'gc> {
             leading,
             width: union_bounds.width(),
             height: union_bounds.height() + descent + leading,
-            x: union_bounds.offset_x() + Twips::from_pixels(EditText::INTERNAL_PADDING),
+            x: union_bounds.offset_x() + Self::GUTTER_WIDTH,
         })
     }
 
@@ -2037,8 +2032,7 @@ impl<'gc> EditText<'gc> {
         }
 
         let bounds = edit_text.layout.char_bounds(index, text)?;
-        let padding = Twips::from_pixels(Self::INTERNAL_PADDING);
-        let bounds = Matrix::translate(padding, padding) * bounds;
+        let bounds = Matrix::translate(Self::GUTTER_WIDTH, Self::GUTTER_WIDTH) * bounds;
         Some(bounds)
     }
 
@@ -2098,8 +2092,8 @@ impl<'gc> EditText<'gc> {
         let Some(mut position) = self.global_to_local(point) else {
             return false;
         };
-        position.x += Twips::from_pixels(Self::INTERNAL_PADDING) + Twips::from_pixels(text.hscroll);
-        position.y += Twips::from_pixels(Self::INTERNAL_PADDING) + text.vertical_scroll_offset();
+        position.x += Self::GUTTER_WIDTH + Twips::from_pixels(text.hscroll);
+        position.y += Self::GUTTER_WIDTH + text.vertical_scroll_offset();
 
         text.layout.boxes_iter().any(|layout| {
             layout.is_link()
@@ -2355,9 +2349,9 @@ impl<'gc> TDisplayObject<'gc> for EditText<'gc> {
 
         context.commands.push_mask();
         let mask = Matrix::create_box(
-            edit_text.bounds.width().to_pixels() as f32,
+            (edit_text.bounds.width() - Self::GUTTER_WIDTH * 2).to_pixels() as f32,
             edit_text.bounds.height().to_pixels() as f32,
-            Twips::ZERO,
+            Self::GUTTER_WIDTH,
             Twips::ZERO,
         );
         context.commands.draw_rect(
@@ -2371,8 +2365,8 @@ impl<'gc> TDisplayObject<'gc> for EditText<'gc> {
         // If this is actually right, offset the border in `redraw_border` instead of doing an extra push.
         context.transform_stack.push(&Transform {
             matrix: Matrix::translate(
-                Twips::from_pixels(Self::INTERNAL_PADDING) - Twips::from_pixels(edit_text.hscroll),
-                Twips::from_pixels(Self::INTERNAL_PADDING) - scroll_offset,
+                Self::GUTTER_WIDTH - Twips::from_pixels(edit_text.hscroll),
+                Self::GUTTER_WIDTH - scroll_offset,
             ),
             ..Default::default()
         });
