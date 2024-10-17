@@ -178,7 +178,7 @@ pub struct EditTextData<'gc> {
     last_click: Option<ClickEventData>,
 }
 
-impl<'gc> EditTextData<'gc> {
+impl EditTextData<'_> {
     fn vertical_scroll_offset(&self) -> Twips {
         if self.scroll > 1 {
             let lines = self.layout.lines();
@@ -732,12 +732,6 @@ impl<'gc> EditText<'gc> {
         self.0.write(activation.context.gc_context).variable = variable;
         self.try_bind_text_field_variable(activation, true);
     }
-
-    /// Construct a base text transform for this `EditText`, to be used for
-    /// evaluating fonts.
-    ///
-    /// The `text_transform` constitutes the base transform that all text is
-    /// written into.
 
     /// Internal padding between the bounds of the EditText and the text.
     /// Applies to each side.
