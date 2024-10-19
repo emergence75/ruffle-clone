@@ -842,7 +842,7 @@ package flash.geom {
 		}
 
 		/**
-			@param	other
+		 * @param	other
 		**/
 		public function copyToMatrix3D(other:Matrix3D):void {
 			other.rawData = this.rawData;
@@ -969,6 +969,8 @@ if (1) {
 
 			var mr:Vector.<Number> = this.rawData;
 
+			// we should use recompose here...
+
 			// we leave perspective untouched... [3,7,11,15]
 			// and translation [12,13,14] is allready set... no need to set it again
 
@@ -988,6 +990,27 @@ if (1) {
 			//mr[11] = 0;
 
 			//mr[15] = 1;
+
+			// Apply skew (if provided)
+			if (components.length > 3) {
+				var skew:Vector3D = components[3];
+				//trace('skew', skew);
+
+				// Apply XY skew
+				mr[4] += mr[0] * skew.x;
+				mr[5] += mr[1] * skew.x;
+				mr[6] += mr[2] * skew.x;
+
+				// Apply XZ skew
+				mr[8] += mr[0] * skew.y;
+				mr[9] += mr[1] * skew.y;
+				mr[10] += mr[2] * skew.y;
+
+				// Apply YZ skew
+				mr[8] += mr[4] * skew.z;
+				mr[9] += mr[5] * skew.z;
+				mr[10] += mr[6] * skew.z;
+			}
 
 			// Apply scale to X, Y, Z axes
 			for (var i:int = 0; i < 3; i++) {
@@ -1081,11 +1104,11 @@ if (1) {
 		 * @param	toMat	The target Matrix3D object.
 		 * @param	percent	A value between 0 and 1 that determines the percent the
 		 * `thisMat` Matrix3D object is interpolated toward the target Matrix3D object.
+		 * @param	correct	Applies scale, skew and perspective, default value false
 		 * @return	A Matrix3D object with elements that place the values of the matrix
 		 * between the original matrix and the target matrix. When the returned matrix is
 		 * applied to the this display object, the object moves the specified percent closer
 		 * to the target object.
-		 * @param	correct	Applies scale, skew and perspective, default value false
 		**/
 		public static function interpolate(thisMat:Matrix3D, toMat:Matrix3D, percent:Number, correct:Boolean = false):Matrix3D {
 
@@ -1159,7 +1182,6 @@ if (1) {
 			ty = decomposedA[0].y * (1 - percent) + decomposedB[0].y * percent;
 			tz = decomposedA[0].z * (1 - percent) + decomposedB[0].z * percent;
 
-			//trace(decomposedA[2].x, decomposedB[2].x, scale_x);
 			var x:Number, y:Number, z:Number, w:Number;
 			
 			if (debug) trace('v0', v0, v0.w); // for the first vector * rotation
@@ -1273,15 +1295,6 @@ if (1) {
 
 			if (correct) {
 
-				// Apply scale
-				for (var i:int = 0; i < 3; i++) {
-					mr[i] *= scale.x;  // X-axis
-					mr[4 + i] *= scale.y;  // Y-axis
-					mr[8 + i] *= scale.z;  // Z-axis
-				}
-
-				if (debug) trace('scaled mr', mr);
-
 				// Apply skew * tbd testing
 
 				// Apply XY skew
@@ -1300,6 +1313,15 @@ if (1) {
 				mr[10] += mr[6] * skew.z;
 
 				if (debug) trace('skew mr', mr);
+
+				// Apply scale
+				for (var i:int = 0; i < 3; i++) {
+					mr[i] *= scale.x;  // X-axis
+					mr[4 + i] *= scale.y;  // Y-axis
+					mr[8 + i] *= scale.z;  // Z-axis
+				}
+
+				if (debug) trace('scaled mr', mr);
 
 				// Apply perspective * tbd testing
 
@@ -1472,13 +1494,6 @@ if (1) {
 					mr[15] = 1;
 			}
 
-			// Apply scale
-			for (var i:int = 0; i < 3; i++) {
-				mr[i] *= scale.x;  // X-axis
-				mr[4 + i] *= scale.y;  // Y-axis
-				mr[8 + i] *= scale.z;  // Z-axis
-			}
-
 			// Apply skew (if provided)
 			if (components.length > 3) {
 				var skew:Vector3D = components[3];
@@ -1497,6 +1512,13 @@ if (1) {
 				mr[8] += mr[4] * skew.z;
 				mr[9] += mr[5] * skew.z;
 				mr[10] += mr[6] * skew.z;
+			}
+
+			// Apply scale
+			for (var i:int = 0; i < 3; i++) {
+				mr[i] *= scale.x;  // X-axis
+				mr[4 + i] *= scale.y;  // Y-axis
+				mr[8 + i] *= scale.z;  // Z-axis
 			}
 
 			// Apply perspective (if provided)
@@ -1574,31 +1596,31 @@ if (1) {
 			}
 			switch (column) {
 				case 0:
-				    this._rawData[0] = vector3D.x;
-				    this._rawData[1] = vector3D.y;
-				    this._rawData[2] = vector3D.z;
-				    this._rawData[3] = vector3D.w;
+					this._rawData[0] = vector3D.x;
+					this._rawData[1] = vector3D.y;
+					this._rawData[2] = vector3D.z;
+					this._rawData[3] = vector3D.w;
 					break;
 
 				case 1:
-				    this._rawData[4] = vector3D.x;
-				    this._rawData[5] = vector3D.y;
-				    this._rawData[6] = vector3D.z;
-				    this._rawData[7] = vector3D.w;
+					this._rawData[4] = vector3D.x;
+					this._rawData[5] = vector3D.y;
+					this._rawData[6] = vector3D.z;
+					this._rawData[7] = vector3D.w;
 					break;
 
 				case 2:
-				    this._rawData[8] = vector3D.x;
-				    this._rawData[9] = vector3D.y;
-				    this._rawData[10] = vector3D.z;
-				    this._rawData[11] = vector3D.w;
+					this._rawData[8] = vector3D.x;
+					this._rawData[9] = vector3D.y;
+					this._rawData[10] = vector3D.z;
+					this._rawData[11] = vector3D.w;
 					break;
 
 				case 3:
-				    this._rawData[12] = vector3D.x;
-				    this._rawData[13] = vector3D.y;
-				    this._rawData[14] = vector3D.z;
-				    this._rawData[15] = vector3D.w;
+					this._rawData[12] = vector3D.x;
+					this._rawData[13] = vector3D.y;
+					this._rawData[14] = vector3D.z;
+					this._rawData[15] = vector3D.w;
 					break;
 			}
 		}
