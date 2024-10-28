@@ -35,8 +35,8 @@ package flash.geom {
 	 * projectionCenter properties. Next, assign the `PerspectiveProjection` object to the parent display
 	 * object using the `DisplayObject.transform` property. The specified projection matrix and transformation
 	 * will then apply to all the display object's three-dimensional children.
-     * 
-     * tbd: not tested, just playing arround...
+	 * 
+	 * tbd: not tested, just playing arround...
 	**/
 	public class PerspectiveProjection {
 
@@ -86,7 +86,13 @@ package flash.geom {
 			}
 
 			this._fieldOfView = value;
-			this._focalLength = stage.stageWidth * (1.0 / Math.tan(this._fieldOfView * TO_RADIAN * 0.5));
+			//this._focalLength = stage.stageWidth * (1.0 / Math.tan(this._fieldOfView * TO_RADIAN * 0.5));
+
+			// influenced by both the field of view and the aspect ratio of the stage. 
+			// the aspect ratio is the ratio of width to height (i.e., stageWidth / stageHeight)
+			var effectiveHeight:Number = 2 * this._znear * Math.tan(this._fieldOfView * TO_RADIAN * 0.5);
+			var effectiveWidth:Number = effectiveHeight * (stage.stageWidth / stage.stageHeight);
+			this._focalLength = effectiveWidth;
 
 			return this._fieldOfView; // return degree
 		}
