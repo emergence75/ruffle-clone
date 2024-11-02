@@ -35,7 +35,7 @@ package flash.geom {
 		 * @return	A modified version of the Matrix3D object specified in the second
 		 * parameter. To transform the display object using the `pointTowards()` method, set
 		 * the Matrix3D property of the display object to the returned Matrix3D object.
-		**/
+		 */
 		public static function pointTowards(percent:Number, mat:Matrix3D, pos:Vector3D, at:Vector3D = null, up:Vector3D = null, correct:Boolean = false):Matrix3D {
 
 			// beware the default at and up is different to pointAt
@@ -76,7 +76,7 @@ package flash.geom {
 		 * object.
 		 * @param	v	The Vector3D object that is projected to a new space coordinate.
 		 * @return	A new Vector3D with a transformed space coordinate.
-		**/
+		 */
 		public static function projectVector(m:Matrix3D, v:Vector3D):Vector3D {
 			var projected = m.transformVector(v);
 			projected.x /= projected.w;
@@ -115,7 +115,7 @@ package flash.geom {
 		 * the eye to the Vector3D object in the view or eye space. You should pre-allocate
 		 * the Vector and specify the u and v values. The projectVectors method fills the t
 		 * value for each projected point.
-		**/
+		 */
 		// Based on https://github.com/openfl/openfl/blob/971a4c9e43b5472fd84d73920a2b7c1b3d8d9257/src/openfl/geom/Utils3D.hx
 		public static function projectVectors(m:Matrix3D, verts:Vector.<Number>, projectedVerts:Vector.<Number>, uvts:Vector.<Number>):void {
 			var mr = m.rawData;
