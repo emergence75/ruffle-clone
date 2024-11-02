@@ -44,7 +44,7 @@
  * each axis and to manage the different combinations of rotations. When a method of a
  * Matrix3D object is called to transform a display object, the rotation cache of the
  * object is invalidated.
-**/
+ */
 // Based on the MIT-licensed OpenFL code https://github.com/openfl/openfl/blob/develop/src/openfl/geom/Matrix3D.hx
 
 package flash.geom {
@@ -59,7 +59,7 @@ package flash.geom {
 		 * An exception is thrown if the `rawData` property is set to a matrix that is not
 		 * invertible. The Matrix3D object must be invertible. If a non-invertible matrix is
 		 * needed, create a subclass of the Matrix3D object.
-		**/
+		 */
 		// The 4x4 matrix data, stored in column-major order
 		private var _rawData:Vector.<Number>;
 
@@ -97,7 +97,7 @@ package flash.geom {
 		 * An object transformed by applying an identity matrix performs no transformation.
 		 * In other words, if a matrix is multiplied by an identity matrix, the result is a
 		 * matrix that is the same as (identical to) the original matrix.
-		**/
+		 */
 		public function identity():void {
 			// Note that every 4 elements is a *column*, not a row
 			this._rawData = new <Number>[
@@ -130,7 +130,7 @@ package flash.geom {
 		 * @param	x	An incremental translation along the x axis.
 		 * @param	y	An incremental translation along the y axis.
 		 * @param	z	An incremental translation along the z axis.
-		**/
+		 */
 		public function appendTranslation(x:Number, y:Number, z:Number):void {
 			this._rawData[12] += x;
 			this._rawData[13] += y;
@@ -187,7 +187,7 @@ package flash.geom {
 		 * `Z_AXIS (Vector3D(0,0,1))`. This vector should have a length of one.
 		 * @param	pivotPoint	A point that determines the center of an object's rotation.
 		 * The default pivot point for an object is its registration point.
-		**/
+		 */
 		public function appendRotation(degrees:Number, axis:Vector3D, pivotPoint:Vector3D = null):void {
 			var tx:Number, ty:Number, tz:Number;
 			tx = ty = tz = 0;
@@ -245,7 +245,7 @@ package flash.geom {
 		 * @param	vector	The vector object from which to copy the data.
 		 * @param	index
 		 * @param	transpose
-		**/
+		 */
 		[API("674")]
 		public function copyRawDataFrom(vector:Vector.<Number>, index:uint = 0, transpose:Boolean = false):void {
 			if (transpose) {
@@ -268,7 +268,7 @@ package flash.geom {
 		 * 
 		 * @param	row	The row from which to copy the data from.
 		 * @param	vector3D	The Vector3D object to copy the data into.
-		**/
+		 */
 		// Based on https://github.com/openfl/openfl/blob/develop/src/openfl/geom/Matrix3D.hx#L542C1-L573
 		[API("674")]
 		public function copyRowTo(row:uint, vector3D:Vector3D):void {
@@ -309,7 +309,7 @@ package flash.geom {
 		 * 
 		 * @param	row	The row from which to copy the data to.
 		 * @param	vector3D	The Vector3D object from which to copy the data.
-		**/
+		 */
 		// Based on https://github.com/openfl/openfl/blob/develop/src/openfl/geom/Matrix3D.hx#L504-L534
 		[API("674")]
 		public function copyRowFrom(row:uint, vector3D:Vector3D):void {
@@ -369,7 +369,7 @@ package flash.geom {
 		 * @param	v	A Vector3D object holding the coordinates that are going to be
 		 * transformed.
 		 * @return	Vector3D	A Vector3D object with the transformed coordinates.
-		**/
+		 */
 		public function deltaTransformVector(v:Vector3D):Vector3D {
 			var x:Number = this._rawData[0] * v.x + this._rawData[4] * v.y + this._rawData[8] * v.z;
 			var y:Number = this._rawData[1] * v.x + this._rawData[5] * v.y + this._rawData[9] * v.z;
@@ -402,7 +402,7 @@ package flash.geom {
 		 * @param	v	A Vector3D object holding the coordinates that are going to be
 		 * transformed.
 		 * @return	Vector3D	A Vector3D object with the transformed coordinates.
-		**/
+		 */
 		public function transformVector(v:Vector3D):Vector3D {
 			var x:Number = this._rawData[0] * v.x + this._rawData[4] * v.y + this._rawData[8] * v.z + this._rawData[12];
 			var y:Number = this._rawData[1] * v.x + this._rawData[5] * v.y + this._rawData[9] * v.z + this._rawData[13];
@@ -451,7 +451,7 @@ package flash.geom {
 		 * method to the copy.
 		 * 
 		 * An orthogonal matrix is a square matrix whose transpose is equal to its inverse.
-		**/
+		 */
 		public function transpose():void {
 			// Make a copy
 			var mr = this.rawData;
@@ -475,7 +475,7 @@ package flash.geom {
 		 * An exception is thrown if the `rawData` property is set to a matrix that is not
 		 * invertible. The Matrix3D object must be invertible. If a non-invertible matrix is
 		 * needed, create a subclass of the Matrix3D object.
-		**/
+		 */
 		public function append(lhs:Matrix3D):void {
 			var m111:Number = this._rawData[0],
 				m121:Number = this._rawData[4],
@@ -557,7 +557,7 @@ package flash.geom {
 		 * @param	xScale	A multiplier used to scale the object along the x axis.
 		 * @param	yScale	A multiplier used to scale the object along the y axis.
 		 * @param	zScale	A multiplier used to scale the object along the z axis.
-		**/
+		 */
 		// Based on https://github.com/openfl/openfl/blob/971a4c9e43b5472fd84d73920a2b7c1b3d8d9257/src/openfl/geom/Matrix3D.hx#L307
 		public function appendScale(xScale:Number, yScale:Number, zScale:Number):void {
 			this.append(new Matrix3D(Vector.<Number>([
@@ -596,7 +596,7 @@ package flash.geom {
 		 * @param	x	An incremental translation along the x axis.
 		 * @param	y	An incremental translation along the y axis.
 		 * @param	z	An incremental translation along the z axis.
-		**/
+		 */
 		public function prependTranslation(x:Number, y:Number, z:Number):void {
 			var m = new Matrix3D();
 			m.position = new Vector3D(x, y, z);
@@ -647,7 +647,7 @@ package flash.geom {
 		 * `Z_AXIS (Vector3D(0,0,1))`. This vector should have a length of one.
 		 * @param	pivotPoint	A point that determines the center of rotation. The default
 		 * pivot point for an object is its registration point.
-		**/
+		 */
 		public function prependRotation(degrees:Number, axis:Vector3D, pivotPoint:Vector3D = null):void {
 			var m = new Matrix3D();
 			m.appendRotation(degrees, axis, pivotPoint);
@@ -662,7 +662,7 @@ package flash.geom {
 		 * 
 		 * With the `position` property, you can get the translation elements of the
 		 * transformation matrix.
-		**/
+		 */
 		public function get position():Vector3D {
 			return new Vector3D(this._rawData[12], this._rawData[13], this._rawData[14]);
 		}
@@ -675,7 +675,7 @@ package flash.geom {
 		 * 
 		 * With the `position` property, you set the translation elements of the
 		 * transformation matrix.
-		**/
+		 */
 		public function set position(val:Vector3D):void {
 			this._rawData[12] = val.x;
 			this._rawData[13] = val.y;
@@ -705,7 +705,7 @@ package flash.geom {
 		 * 
 		 * @param	rhs	A right-hand-side of the matrix by which the current Matrix3D is
 		 * multiplied.
-		**/
+		 */
 		public function prepend(rhs:Matrix3D):void {
 			var m111:Number = rhs._rawData[0],
 				m121:Number = rhs._rawData[4],
@@ -788,7 +788,7 @@ package flash.geom {
 		 * @param	xScale	A multiplier used to scale the object along the x axis.
 		 * @param	yScale	A multiplier used to scale the object along the y axis.
 		 * @param	zScale	A multiplier used to scale the object along the z axis.
-		**/
+		 */
 		public function prependScale(xScale:Number, yScale:Number, zScale:Number):void {
 			var m = new Matrix3D();
 			m.appendScale(xScale, yScale, zScale);
@@ -800,7 +800,7 @@ package flash.geom {
 		 * Matrix3D object.
 		 * 
 		 * @param	sourceMatrix3D	The Matrix3D object from which to copy the data.
-		**/
+		 */
 		[API("674")]
 		public function copyFrom(other:Matrix3D):void {
 			// This makes a copy of other.rawData
@@ -815,7 +815,7 @@ package flash.geom {
 		 * @param	vector	The vector object to which to copy the data.
 		 * @param	index
 		 * @param	transpose
-		**/
+		 */
 		[API("674")]
 		public function copyRawDataTo(vector:Vector.<Number>, index:uint = 0, transpose:Boolean = false):void {
 			if (transpose) {
@@ -836,14 +836,14 @@ package flash.geom {
 		 * 
 		 * @return	A new Matrix3D object that is an exact copy of the current Matrix3D
 		 * object.
-		**/
+		 */
 		public function clone():Matrix3D {
 			return new Matrix3D(this.rawData);
 		}
 
 		/**
 		 * @param	other
-		**/
+		 */
 		public function copyToMatrix3D(other:Matrix3D):void {
 			other.rawData = this.rawData;
 		}
@@ -880,7 +880,7 @@ package flash.geom {
 		 * Object-relative defines the object's transformation relative to the object space,
 		 * the object's own frame of reference and coordinate system. Default value is the
 		 * +z-axis (0,0,1).
-		**/
+		 */
 		public function pointAt(pos:Vector3D, at:Vector3D = null, up:Vector3D = null):void {
 			if (at == null) {
 				at = new Vector3D(0, 0, 1); // Default aiming direction (forward along the Z axis)
@@ -967,9 +967,11 @@ if (1) {
 			yAxis.normalize();
 			yAxis.negate(); // bring it to flash 3d space
 
-			var mr:Vector.<Number> = this.rawData;
+			// we should use recompose here... but then we need a quaternion
+			// see
+			// https://www.w3.org/TR/css-transforms-2/#matrix-interpolation
 
-			// we should use recompose here...
+			var mr:Vector.<Number> = this.rawData;
 
 			// we leave perspective untouched... [3,7,11,15]
 			// and translation [12,13,14] is allready set... no need to set it again
@@ -1054,7 +1056,7 @@ if (1) {
 		 * the display object is to its current position. The closer the value is to 0, the
 		 * closer the display object is to the target.
 		 * @param	correct	Applies scale, skew and perspective, default value false
-		**/
+		 */
 		public function interpolateTo(toMat:Matrix3D, percent:Number, correct:Boolean = false):void {
 			// beware this logic is different to method interpolate, 0 means we are at the toMat
 			// so we start here with the toMat...
@@ -1109,7 +1111,7 @@ if (1) {
 		 * between the original matrix and the target matrix. When the returned matrix is
 		 * applied to the this display object, the object moves the specified percent closer
 		 * to the target object.
-		**/
+		 */
 		public static function interpolate(thisMat:Matrix3D, toMat:Matrix3D, percent:Number, correct:Boolean = false):Matrix3D {
 
 			var debug:Boolean = false;
@@ -1379,7 +1381,7 @@ if (1) {
 		 * orientation style, see the geom.Orientation3D class.
 		 * @return	Returns `false` if any of the Vector3D elements of the components
 		 * Vector do not exist or are `null`.
-		**/
+		 */
 		// Based on OpenFL: https://github.com/openfl/openfl/blob/971a4c9e43b5472fd84d73920a2b7c1b3d8d9257/src/openfl/geom/Matrix3D.hx#L1437
 		public function recompose(components:Vector.<Vector3D>, orientationStyle:String = "eulerAngles"):Boolean {
 
@@ -1494,6 +1496,8 @@ if (1) {
 					mr[15] = 1;
 			}
 
+			// note the order is extremly important, skew must be applied before scale
+
 			// Apply skew (if provided)
 			if (components.length > 3) {
 				var skew:Vector3D = components[3];
@@ -1546,7 +1550,7 @@ if (1) {
 
 		 * @param	column	The column from which to copy the data.
 		 * @param	vector3D	The destination Vector3D object of the copy.
-		**/
+		 */
 		[API("674")]
 		public function copyColumnTo(column:uint, vector3D:Vector3D):void {
 			if (column > 3) {
@@ -1588,7 +1592,7 @@ if (1) {
 		 * 
 		 * @param	column	The destination column of the copy.
 		 * @param	vector3D	The Vector3D object from which to copy the data.
-		**/
+		 */
 		[API("674")]
 		public function copyColumnFrom(column:uint, vector3D:Vector3D):void {
 			if (column > 3) {
@@ -1662,7 +1666,7 @@ if (1) {
 		 * different orientation style, see the geom.Orientation3D class.
 		 * @return	A Vector of three Vector3D objects, each holding the translation,
 		 * rotation, and scale settings, respectively.
-		**/
+		 */
 		public function decompose(orientationStyle:String = "eulerAngles"):Vector.<Vector3D> {
 
 			if (!(orientationStyle == Orientation3D.AXIS_ANGLE || orientationStyle == Orientation3D.EULER_ANGLES || orientationStyle == Orientation3D.QUATERNION)) {
@@ -1714,6 +1718,8 @@ if (1) {
 
 				}
 			}
+
+			// note the order is extremly important, scale must be removed before skew 
 
 			var scale = new Vector3D();
 
@@ -1855,7 +1861,7 @@ if (1) {
 		 * The Matrix3D object must be invertible.
 
 		 * @return	Returns `true` if the matrix was successfully inverted.
-		**/
+		 */
 		public function invert():Boolean {
 			var d = determinant;
 			var invertable = Math.abs(d) > 0.00000000001;
@@ -1911,7 +1917,7 @@ if (1) {
 		 * also used to solve a series of equations.
 		 * 
 		 * Only a square matrix, like the Matrix3D class, has a determinant.
-		**/
+		 */
 		public function get determinant():Number {
 			mr = this.rawData;
 			return 1 * ((mr[0] * mr[5] - mr[4] * mr[1]) * (mr[10] * mr[15] - mr[14] * mr[11])
