@@ -37,14 +37,14 @@ package flash.geom {
 	 * will then apply to all the display object's three-dimensional children.
 	 * 
 	 * tbd: not tested, just playing arround...
-	**/
+	 */
 	public class PerspectiveProjection {
 
 		private var _focalLength:Number;
 		private var _fieldOfView:Number;
 		private var _matrix3D:Matrix3D;
 
-		private var _projectionCenter:Point; // only used as storage point in this class
+		private var _projectionCenter:Point;
 
 		private var _znear:Number = 0.1;  // Default value
 		private var _zfar:Number = 1000;  // Default value
@@ -75,7 +75,7 @@ package flash.geom {
 		 * than 0 are magnified, while positions with a z value larger than 0 are minimized. With a
 		 * large angle, a display object moving down the z axis appears to change size quickly and moves
 		 * a great distance. If the field of view is set to 0 or 180, nothing is seen on the screen.
-		**/
+		 */
 		public function get fieldOfView():Number {
 			return this._fieldOfView;
 		}
@@ -101,7 +101,7 @@ package flash.geom {
 		 * The distance between the eye or the viewpoint's origin (0,0,0) and the display object located
 		 * in the z axis. During the perspective transformation, the `focalLength` is calculated dynamically
 		 * using the angle of the field of view and the stage's aspect ratio (stage width divided by stage height).
-		**/
+		 */
 		public function get focalLength():Number {
 			return this._focalLength;
 		}
@@ -115,7 +115,7 @@ package flash.geom {
 		 * The projectionCenter property is an offset to the default registration point that is the upper left of the stage,
 		 * point (0,0). The default projection transformation center is in the middle of the stage, which means the
 		 * three-dimensional display objects disappear toward the center of the stage as they move backwards in the z axis.
-		**/
+		 */
 		public function get projectionCenter():Point {
 			return this._projectionCenter;
 		}
@@ -159,7 +159,7 @@ package flash.geom {
 		 * object was needed, the `toMatrix3D()` method can retrieve the underlying `Matrix3D` object of the display object.
 		 * For example, the `toMatrix3D()` method can be used with the `Utils3D.projectVectors()` method.
 		 * @return The underlying `Matrix3D` object.
-		**/
+		 */
 		public function toMatrix3D():Matrix3D {
 
 			var aspectRatio:Number = stage.stageWidth / stage.stageHeight;
@@ -171,6 +171,11 @@ package flash.geom {
 			mr[5] = f;               // scales Y coordinates
 			mr[10] = (this._zfar + this._znear) / (this._znear - this._zfar); // Z-scaling for frustum layers
 			mr[11] = -1;             // Perspective transformation for the Z coordinate
+
+			// also see https://github.com/openfl/openfl/pull/2712
+			mr[12] = ((projectionCenter.x * 2) / stage.stageWidth) - 1;
+			mr[13] = ((projectionCenter.y * 2) / stage.stageHeight) - 1;
+
 			mr[14] = (2 * this._zfar * this._znear) / (this._znear - this._zfar); // Offset for the Z coordinate
 			mr[15] = 0;              // Last element set to 0 to ensure homogeneity
 
